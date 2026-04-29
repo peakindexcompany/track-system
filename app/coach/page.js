@@ -2611,6 +2611,166 @@ export default function CoachDashboard() {
             </div>
           </>
         )}
+
+        {activeTab === "planning" && (
+          <section>
+            <div style={cardStyle}>
+              <h2 style={{ marginTop: 0 }}>
+                {editingSessionId ? "Edit Planned Session" : "Plan Session"}
+              </h2>
+
+              <input
+                style={inputStyle}
+                placeholder="Session type"
+                value={sessionType}
+                onChange={(e) => setSessionType(e.target.value)}
+              />
+
+              <select
+                style={inputStyle}
+                value={sessionGroup}
+                onChange={(e) => setSessionGroup(e.target.value)}
+              >
+                <option value="All">All</option>
+                {eventGroupOrder.map((group) => (
+                  <option key={group} value={group}>
+                    {group}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                style={inputStyle}
+                type="date"
+                value={sessionDate}
+                onChange={(e) => setSessionDate(e.target.value)}
+              />
+
+              <input
+                style={inputStyle}
+                type="number"
+                min="1"
+                max="10"
+                placeholder="Planned RPE"
+                value={plannedRPE}
+                onChange={(e) => setPlannedRPE(e.target.value)}
+              />
+
+              <textarea
+                style={noteInputStyle}
+                placeholder="Workout notes"
+                value={workoutNotes}
+                onChange={(e) => setWorkoutNotes(e.target.value)}
+              />
+
+              <button onClick={handleSavePlannedSession} style={buttonStyle}>
+                {editingSessionId ? "Update Session" : "Save Session"}
+              </button>
+
+              {editingSessionId && (
+                <button onClick={handleCancelEdit} style={secondaryButtonStyle}>
+                  Cancel Edit
+                </button>
+              )}
+            </div>
+
+            <div style={cardStyle}>
+              <h2 style={{ marginTop: 0 }}>Planned Sessions</h2>
+
+              {plannedSessions.length === 0 ? (
+                <p>No planned sessions yet.</p>
+              ) : (
+                plannedSessions.map((session) => (
+                  <div
+                    key={session.id}
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 12,
+                      marginBottom: 10,
+                      background: "#f9fafb",
+                    }}
+                  >
+                    <p style={{ marginTop: 0 }}>
+                      <strong>{session.sessionType || "Session"}</strong>
+                    </p>
+                    <p>Group: {session.sessionGroup || "All"}</p>
+                    <p>Date: {session.sessionDate || "N/A"}</p>
+                    <p>Planned RPE: {session.plannedRPE || "N/A"}</p>
+                    <p style={{ whiteSpace: "pre-wrap" }}>
+                      Notes: {session.workoutNotes || "None"}
+                    </p>
+
+                    <button onClick={() => handleEditSession(session)} style={editButtonStyle}>
+                      Edit
+                    </button>
+                    <button onClick={() => handleDeleteSession(session.id)} style={deleteButtonStyle}>
+                      Delete
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
+        {activeTab === "averages" && (
+          <section>
+            <div style={cardStyle}>
+              <h2 style={{ marginTop: 0 }}>Team Averages</h2>
+              <p style={{ color: "#6b7280" }}>
+                Compare short-term, weekly, and baseline readiness trends.
+              </p>
+
+              {athleteAverages.length === 0 ? (
+                <p>No athlete averages available yet.</p>
+              ) : (
+                athleteAverages.map((athlete) => (
+                  <div
+                    key={`${athlete.name}-${athlete.eventGroup}`}
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 12,
+                      marginBottom: 10,
+                      background: "#f9fafb",
+                    }}
+                  >
+                    <p style={{ marginTop: 0 }}>
+                      <strong>{athlete.name}</strong>
+                    </p>
+                    <p>Event Group: {athlete.eventGroup}</p>
+                    <p>3-Day Avg: {athlete.threeDayAvg ?? "N/A"}</p>
+                    <p>7-Day Avg: {athlete.sevenDayAvg ?? "N/A"}</p>
+                    <p>14-Day Avg: {athlete.fourteenDayAvg ?? "N/A"}</p>
+                    <p>
+                      Trend: <strong>{athlete.trend}</strong>
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
+        {activeTab === "logs" && (
+          <section id="coach-athlete-logs-section">
+            {renderFilters()}
+
+            <div style={cardStyle}>
+              <h2 style={{ marginTop: 0 }}>Athlete Readiness Logs</h2>
+              <p style={{ color: "#6b7280" }}>
+                Showing {filteredAthleteLogs.length} of {athleteLogs.length} logs
+              </p>
+
+              {filteredAthleteLogs.length === 0 ? (
+                <p>No logs match your filters.</p>
+              ) : (
+                filteredAthleteLogs.map((log) => renderAthleteLogCard(log, true))
+              )}
+            </div>
+          </section>
+        )}
       </div>
     </main>
   );
