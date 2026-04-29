@@ -1464,6 +1464,7 @@ export default function CoachDashboard() {
           Readiness Ratio: <strong>{log.readinessRatio || "N/A"}</strong>
         </p>
 
+        <p>
           Readiness Model: <strong>{log.readinessModel || "Standard"}</strong>
         </p>
 
@@ -1496,6 +1497,8 @@ export default function CoachDashboard() {
         <p style={{ whiteSpace: "pre-wrap" }}>
           Athlete Notes: {log.notes || "None"}
         </p>
+
+        {/* Removed Adjusted Load, Compounded Load, and 14-Day Avg Load blocks */}
 
         {renderCoachNoteBox(log)}
 
