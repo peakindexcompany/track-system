@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../lib/firebase";
+import {
+  calculateAdjustedLoad,
+  calculateCompoundedLoad,
+  calculateReadinessRatio,
+} from "../../lib/readiness";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import {
   collection,
@@ -170,10 +175,11 @@ export default function CoachDashboard() {
             }));
 
             const sortedLogs = sortLogsNewestFirst(logsData);
-            setAthleteLogs(sortedLogs);
+            const enhancedLogs = enhanceLogsWithCompoundedReadiness(sortedLogs);
+            setAthleteLogs(enhancedLogs);
 
             const notesObject = {};
-            sortedLogs.forEach((log) => {
+            enhancedLogs.forEach((log) => {
               notesObject[log.id] = log.coachNote || "";
             });
 
@@ -216,10 +222,11 @@ export default function CoachDashboard() {
                   }));
 
                   const sortedLogs = sortLogsNewestFirst(logsData);
-                  setAthleteLogs(sortedLogs);
+                  const enhancedLogs = enhanceLogsWithCompoundedReadiness(sortedLogs);
+                  setAthleteLogs(enhancedLogs);
 
                   const notesObject = {};
-                  sortedLogs.forEach((log) => {
+                  enhancedLogs.forEach((log) => {
                     notesObject[log.id] = log.coachNote || "";
                   });
 
@@ -292,10 +299,11 @@ export default function CoachDashboard() {
     }));
 
     const sortedLogs = sortLogsNewestFirst(logsData);
-    setAthleteLogs(sortedLogs);
+    const enhancedLogs = enhanceLogsWithCompoundedReadiness(sortedLogs);
+    setAthleteLogs(enhancedLogs);
 
     const notesObject = {};
-    sortedLogs.forEach((log) => {
+    enhancedLogs.forEach((log) => {
       notesObject[log.id] = log.coachNote || "";
     });
 
