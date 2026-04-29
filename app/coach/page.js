@@ -2598,16 +2598,20 @@ export default function CoachDashboard() {
                       </div>
 
                       <p style={{ margin: "0 0 4px", color: "#6b7280", fontSize: 13 }}>
-                        {item.eventGroup} • {item.type}
+                        {item.type} • {item.eventGroup}
                       </p>
 
-                      <p style={{ margin: 0, color: "#374151" }}>{item.message}</p>
-
-                      <p
-                        style={{
-                          margin: "8px 0 0",
-                          color: "#2563eb",
-                          fontSize: 13,
-                          fontWeight: "bold",
-                        }}
-    <truncated__content/>
+                      <p style={{ margin: 0, color: "#374151", fontSize: 13 }}>
+                        {item.message}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </main>
+  );
+}
