@@ -726,6 +726,36 @@ export default function CoachDashboard() {
     return "Coach Suggestion: Not enough data. Use athlete feedback.";
   };
 
+  // --- BEGIN: Trend helpers ---
+  const getSafeReadinessRatio = (ratio) => {
+    const v = Number(ratio);
+    if (!Number.isFinite(v)) return 0;
+    return Math.max(0, v);
+  };
+
+  const getAthleteLogsForTrend = (log) => {
+    const key = log.userId || log.name || log.id;
+    return sortLogsNewestFirst(
+      athleteLogs.filter((e) => (e.userId || e.name || e.id) === key)
+    );
+  };
+
+  const getReadinessTrend = (logs, days = 3) => {
+    if (!logs || logs.length < days * 2) {
+      return { label: "Not enough data", symbol: "—", color: "#6b7280" };
+    }
+    const recent = logs.slice(0, days);
+    const prev = logs.slice(days, days * 2);
+    const avg = (arr) => arr.reduce((s, x) => s + getSafeReadinessRatio(x.readinessRatio), 0) / arr.length;
+    const r = avg(recent);
+    const p = avg(prev);
+    const d = r - p;
+    if (d > 0.05) return { label: "Increasing strain", symbol: "↑", color: "#d97706" };
+    if (d < -0.05) return { label: "Recovering", symbol: "↓", color: "#2563eb" };
+    return { label: "Stable", symbol: "→", color: "#16a34a" };
+  };
+  // --- END: Trend helpers ---
+
   const getLogDate = (log) => {
     if (!log.createdAt) return null;
     if (log.createdAt.toDate) return log.createdAt.toDate();
@@ -1428,7 +1458,8 @@ export default function CoachDashboard() {
     </div>
   );
     const renderAthleteLogCard = (log, showDelete = true) => {
-      const safeReadinessRatio = Math.max(0, Number(log.readinessRatio || 0));
+      const safeReadinessRatio = getSafeReadinessRatio(log.readinessRatio);
+      const trend = getReadinessTrend(getAthleteLogsForTrend(log), 3);
       const readinessColor = getReadinessColor(safeReadinessRatio);
       const readinessStatus =
         log.readinessStatus || getReadinessStatus(safeReadinessRatio);
@@ -1467,6 +1498,10 @@ export default function CoachDashboard() {
 
           <p>
             Readiness Model: <strong>{log.readinessModel || "Standard"}</strong>
+          </p>
+
+          <p style={{ color: trend.color }}>
+            Trend: <strong>{trend.symbol} {trend.label}</strong>
           </p>
 
           <p style={{ color: readinessColor, fontWeight: "bold" }}>
