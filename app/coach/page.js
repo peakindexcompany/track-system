@@ -788,7 +788,7 @@ export default function CoachDashboard() {
     if (recentLogs.length === 0) return null;
 
     const total = recentLogs.reduce(
-      (sum, log) => sum + Number(log.readinessRatio || 0),
+      (sum, log) => sum + getSafeReadinessRatio(log.readinessRatio),
       0
     );
 
@@ -811,15 +811,16 @@ export default function CoachDashboard() {
     return Object.keys(grouped).map((name) => {
       const logs = grouped[name];
 
-      const twoDayAvg = getAverageForDays(logs, 2);
+      const threeDayAvg = getAverageForDays(logs, 3);
+      const sevenDayAvg = getAverageForDays(logs, 7);
       const fourteenDayAvg = getAverageForDays(logs, 14);
 
       let trend = "Not enough data";
 
-      if (twoDayAvg !== null && fourteenDayAvg !== null) {
-        if (twoDayAvg > fourteenDayAvg + 0.15) {
+      if (threeDayAvg !== null && fourteenDayAvg !== null) {
+        if (threeDayAvg > fourteenDayAvg + 0.15) {
           trend = "Trending higher strain";
-        } else if (twoDayAvg < fourteenDayAvg - 0.15) {
+        } else if (threeDayAvg < fourteenDayAvg - 0.15) {
           trend = "Trending lower strain";
         } else {
           trend = "Stable";
@@ -829,7 +830,8 @@ export default function CoachDashboard() {
       return {
         name,
         eventGroup: logs[0]?.eventGroup || "N/A",
-        twoDayAvg,
+        threeDayAvg,
+        sevenDayAvg,
         fourteenDayAvg,
         trend,
       };
@@ -1273,7 +1275,8 @@ export default function CoachDashboard() {
 
       if (!latest) return;
 
-      const twoDayAvg = getAverageForDays(sortedLogs, 2);
+      const threeDayAvg = getAverageForDays(sortedLogs, 3);
+      const sevenDayAvg = getAverageForDays(sortedLogs, 7);
       const fourteenDayAvg = getAverageForDays(sortedLogs, 14);
       const rpeDifference = Number(latest.actualRPE || 0) - Number(latest.plannedRPE || 0);
 
@@ -1332,13 +1335,23 @@ export default function CoachDashboard() {
         });
       }
 
-      if (twoDayAvg !== null && fourteenDayAvg !== null && twoDayAvg > fourteenDayAvg + 0.15) {
+      if (threeDayAvg !== null && fourteenDayAvg !== null && threeDayAvg > fourteenDayAvg + 0.15) {
         notifications.push({
           ...baseNotification,
           type: "Rising Strain",
           severity: "Medium",
           color: "#d97706",
-          message: `${latest.name || "Unnamed Athlete"}'s 2-day readiness average is trending above their 14-day average.`,
+          message: `${latest.name || "Unnamed Athlete"}'s 3-day readiness average is trending above their 14-day average.`,
+        });
+      }
+
+      if (sevenDayAvg !== null && fourteenDayAvg !== null && sevenDayAvg > fourteenDayAvg + 0.15) {
+        notifications.push({
+          ...baseNotification,
+          type: "Weekly Strain",
+          severity: "Medium",
+          color: "#d97706",
+          message: `${latest.name || "Unnamed Athlete"}'s 7-day readiness average is trending above their 14-day baseline.`,
         });
       }
 
@@ -2597,284 +2610,4 @@ export default function CoachDashboard() {
                           fontSize: 13,
                           fontWeight: "bold",
                         }}
-                      >
-                        Click to view athlete logs →
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>Event Group Snapshot</h2>
-              <p style={{ marginTop: 0, color: "#6b7280" }}>
-                Quick view by training group.
-              </p>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
-                  gap: 10,
-                }}
-              >
-                {eventGroupSummary.map((item) => (
-                  <div
-                    key={item.group}
-                    style={{
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 12,
-                      padding: 12,
-                      background: item.alertCount > 0 ? "#fff7f7" : "#f9fafb",
-                    }}
-                  >
-                    <p style={{ margin: "0 0 6px", fontWeight: "bold" }}>
-                      {item.group}
-                    </p>
-
-                    <p style={{ margin: "0 0 4px", color: "#6b7280", fontSize: 13 }}>
-                      Athletes: <strong>{item.athleteCount}</strong>
-                    </p>
-
-                    <p style={{ margin: "0 0 4px", color: "#6b7280", fontSize: 13 }}>
-                      Logs: <strong>{item.logCount}</strong>
-                    </p>
-
-                    <p
-                      style={{
-                        margin: "0 0 10px",
-                        color: item.alertCount > 0 ? "#dc2626" : "#6b7280",
-                        fontSize: 13,
-                      }}
-                    >
-                      Alerts: <strong>{item.alertCount}</strong>
-                    </p>
-
-                    <button
-                      onClick={() => {
-                        setActiveTab("logs");
-                        setFilterName("");
-                        setFilterEventGroup(item.group);
-                        setFilterAlertStatus("All");
-                        setTimeout(() => scrollToLogsSection(), 50);
-                      }}
-                      style={{
-                        ...secondaryButtonStyle,
-                        width: "100%",
-                        marginRight: 0,
-                      }}
-                    >
-                      View Group
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setSelectedGroupForMessage(item.group);
-                        setGroupMessageOpen(true);
-                      }}
-                      style={{
-                        ...buttonStyle,
-                        width: "100%",
-                        marginRight: 0,
-                        marginTop: 8,
-                      }}
-                    >
-                      Message Group
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-          </>
-        )}
-
-
-
-        {activeTab === "planning" && (
-          <section>
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>
-                {editingSessionId
-                  ? "Edit Planned Session"
-                  : "Create Planned Session"}
-              </h2>
-
-              {editingSessionId && (
-                <p style={{ color: "#2563eb" }}>
-                  Editing mode is active. Update the fields and click Update
-                  Session.
-                </p>
-              )}
-
-              <input
-                style={inputStyle}
-                placeholder="Session Type ex: Tempo, Lift, Recovery"
-                value={sessionType}
-                onChange={(e) => setSessionType(e.target.value)}
-              />
-              <select
-                style={inputStyle}
-                value={sessionGroup}
-                onChange={(e) => setSessionGroup(e.target.value)}
-              >
-                <option value="All">All Groups</option>
-                <option value="Sprints/Jumps">Sprints/Jumps</option>
-                <option value="400/400h/800">400/400h/800</option>
-                <option value="Throws">Throws</option>
-                <option value="Distance">Distance</option>
-                <option value="Mid-Distance">Mid-Distance</option>
-                <option value="Multi">Multi</option>
-              </select>
-
-              <input
-                style={inputStyle}
-                type="date"
-                value={sessionDate}
-                onChange={(e) => setSessionDate(e.target.value)}
-              />
-
-              <input
-                style={inputStyle}
-                type="number"
-                placeholder="Planned RPE"
-                value={plannedRPE}
-                onChange={(e) => setPlannedRPE(e.target.value)}
-              />
-
-              <textarea
-                style={{
-                  ...inputStyle,
-                  minHeight: 100,
-                  resize: "vertical",
-                }}
-                placeholder="Workout Notes"
-                value={workoutNotes}
-                onChange={(e) => setWorkoutNotes(e.target.value)}
-              />
-
-              <button
-                onClick={handleSavePlannedSession}
-                style={buttonStyle}
-              >
-                {editingSessionId ? "Update Session" : "Save Planned Session"}
-              </button>
-
-              {editingSessionId && (
-                <button onClick={handleCancelEdit} style={secondaryButtonStyle}>
-                  Cancel Edit
-                </button>
-              )}
-            </div>
-
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>Recent Planned Sessions</h2>
-
-              {plannedSessions.length === 0 ? (
-                <p>No planned sessions yet.</p>
-              ) : (
-                plannedSessions.map((s) => (
-                  <div
-                    key={s.id}
-                    style={{
-                      borderTop: "1px solid #e5e7eb",
-                      paddingTop: 10,
-                      marginTop: 10,
-                    }}
-                  >
-                    <p>
-                      <strong>{s.sessionType}</strong>
-                    </p>
-                    <p>Date: {s.sessionDate || "N/A"}</p>
-                    <p>Group: {s.sessionGroup || "All"}</p>
-                    <p>Planned RPE: {s.plannedRPE}</p>
-                    <p style={{ whiteSpace: "pre-wrap" }}>
-                      Notes: {s.workoutNotes || "None"}
-                    </p>
-
-                    <button
-                      onClick={() => handleEditSession(s)}
-                      style={editButtonStyle}
-                    >
-                      Edit Session
-                    </button>
-
-                    <button
-                      onClick={() => handleDeleteSession(s.id)}
-                      style={deleteButtonStyle}
-                    >
-                      Delete Session
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        )}
-
-        {activeTab === "averages" && (
-          <section>
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>
-                2-Day / 14-Day Readiness Averages
-              </h2>
-
-              {athleteAverages.length === 0 ? (
-                <p>No athlete averages yet.</p>
-              ) : (
-                athleteAverages.map((athlete) => (
-                  <div key={athlete.name} style={cardStyle}>
-                    <p>
-                      <strong>{athlete.name}</strong>
-                    </p>
-
-                    <p>Event Group: {athlete.eventGroup}</p>
-
-                    <p style={{ color: getReadinessColor(athlete.twoDayAvg) }}>
-                      2-Day Avg:{" "}
-                      <strong>{athlete.twoDayAvg ?? "N/A"}</strong>
-                    </p>
-
-                    <p
-                      style={{
-                        color: getReadinessColor(athlete.fourteenDayAvg),
-                      }}
-                    >
-                      14-Day Avg:{" "}
-                      <strong>{athlete.fourteenDayAvg ?? "N/A"}</strong>
-                    </p>
-
-                    <p>
-                      Trend: <strong>{athlete.trend}</strong>
-                    </p>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        )}
-
-        {activeTab === "logs" && (
-          <section id="coach-athlete-logs-section">
-            {renderFilters()}
-
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>Athlete Readiness Logs</h2>
-
-              <p style={{ color: "#6b7280" }}>
-                Showing {filteredAthleteLogs.length} of {athleteLogs.length} logs
-              </p>
-
-              {filteredAthleteLogs.length === 0 ? (
-                <p>No logs match your filters.</p>
-              ) : (
-                filteredAthleteLogs.map((log) => renderAthleteLogCard(log, true))
-              )}
-            </div>
-          </section>
-        )}
-      </div>
-    </main>
-  );
-}
+    <truncated__content/>
