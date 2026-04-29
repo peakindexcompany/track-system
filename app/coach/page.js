@@ -385,8 +385,8 @@ export default function CoachDashboard() {
           avg14DayLoad: avg14DayLoad ? Number(avg14DayLoad.toFixed(1)) : null,
           readinessRatio:
             compoundedReadinessRatio !== null
-              ? Number(compoundedReadinessRatio.toFixed(2))
-              : currentLog.readinessRatio,
+              ? Number(Math.max(0, compoundedReadinessRatio).toFixed(2))
+              : Math.max(0, Number(currentLog.readinessRatio || 0)),
           readinessModel: "Compounded",
         };
       });
@@ -1428,125 +1428,126 @@ export default function CoachDashboard() {
     </div>
   );
     const renderAthleteLogCard = (log, showDelete = true) => {
-    const readinessColor = getReadinessColor(log.readinessRatio);
-    const readinessStatus =
-      log.readinessStatus || getReadinessStatus(log.readinessRatio);
+      const safeReadinessRatio = Math.max(0, Number(log.readinessRatio || 0));
+      const readinessColor = getReadinessColor(safeReadinessRatio);
+      const readinessStatus =
+        log.readinessStatus || getReadinessStatus(safeReadinessRatio);
 
-    const rpeDifference =
-      Number(log.actualRPE || 0) - Number(log.plannedRPE || 0);
+      const rpeDifference =
+        Number(log.actualRPE || 0) - Number(log.plannedRPE || 0);
 
-    const rpeAdjustment = rpeDifference * 0.2;
+      const rpeAdjustment = rpeDifference * 0.2;
 
-    return (
-      <div
-        key={log.id}
-        style={{
-          border: `2px solid ${readinessColor}`,
-          borderRadius: 14,
-          padding: 14,
-          marginBottom: 14,
-          background: "#ffffff",
-        }}
-      >
-        <p style={{ marginTop: 0 }}>
-          <span style={badgeStyle(readinessColor)}>{readinessStatus}</span>
-        </p>
+      return (
+        <div
+          key={log.id}
+          style={{
+            border: `2px solid ${readinessColor}`,
+            borderRadius: 14,
+            padding: 14,
+            marginBottom: 14,
+            background: "#ffffff",
+          }}
+        >
+          <p style={{ marginTop: 0 }}>
+            <span style={badgeStyle(readinessColor)}>{readinessStatus}</span>
+          </p>
 
-        <p>
-          <strong>{log.name || "Unnamed Athlete"}</strong>
-        </p>
+          <p>
+            <strong>{log.name || "Unnamed Athlete"}</strong>
+          </p>
 
-        <p>Event Group: {log.eventGroup || "N/A"}</p>
-        <p>Session: {log.sessionType || "N/A"}</p>
-        <p>Session Date: {log.sessionDate || "N/A"}</p>
+          <p>Event Group: {log.eventGroup || "N/A"}</p>
+          <p>Session: {log.sessionType || "N/A"}</p>
+          <p>Session Date: {log.sessionDate || "N/A"}</p>
 
-        <p style={{ color: readinessColor }}>
-          Readiness Ratio: <strong>{log.readinessRatio || "N/A"}</strong>
-        </p>
+          <p style={{ color: readinessColor }}>
+            Readiness Ratio: <strong>{Number.isFinite(safeReadinessRatio) ? safeReadinessRatio.toFixed(2) : "N/A"}</strong>
+          </p>
 
-        <p>
-          Readiness Model: <strong>{log.readinessModel || "Standard"}</strong>
-        </p>
+          <p>
+            Readiness Model: <strong>{log.readinessModel || "Standard"}</strong>
+          </p>
 
-        <p style={{ color: readinessColor, fontWeight: "bold" }}>
-          {getReadinessRecommendation(log.readinessRatio, log.shouldTrainToday)}
-        </p>
+          <p style={{ color: readinessColor, fontWeight: "bold" }}>
+            {getReadinessRecommendation(safeReadinessRatio, log.shouldTrainToday)}
+          </p>
 
-        <p>Should Train Today: {log.shouldTrainToday || "N/A"}</p>
-        <p>
-          Yesterday's Workout Completed:{" "}
-          <strong
-            style={{
-              color:
-                log.workoutCompleted === "No"
-                  ? "#dc2626"
-                  : log.workoutCompleted === "Modified"
-                  ? "#d97706"
-                  : log.workoutCompleted === "Yes"
-                  ? "#16a34a"
-                  : "#111827",
-            }}
-          >
-            {log.workoutCompleted || "N/A"}
-          </strong>
-        </p>
-        <p>Planned RPE: {log.plannedRPE || "N/A"}</p>
-        <p>Yesterday’s RPE: {log.actualRPE || "N/A"}</p>
-        <p>RPE Difference: {rpeDifference.toFixed(1)}</p>
-        <p>RPE Adjustment: {rpeAdjustment.toFixed(2)}</p>
-        <p style={{ whiteSpace: "pre-wrap" }}>
-          Athlete Notes: {log.notes || "None"}
-        </p>
-
-        {/* Removed Adjusted Load, Compounded Load, and 14-Day Avg Load blocks */}
-
-        {renderCoachNoteBox(log)}
-
-        {log.coachNote && (
-          <div
-            style={{
-              border: "1px solid #e5e7eb",
-              borderRadius: 12,
-              padding: 12,
-              marginTop: 10,
-              background: "#f9fafb",
-            }}
-          >
-            <p style={{ margin: "0 0 6px", color: "#374151" }}>
-              <strong>Last message:</strong> {log.coachNote}
-            </p>
-
-            <p style={{ margin: "0 0 6px", color: "#6b7280", fontSize: 13 }}>
-              Sent: {formatTimestamp(log.coachNoteUpdatedAt)}
-            </p>
-
-            <span
+          <p>Should Train Today: {log.shouldTrainToday || "N/A"}</p>
+          <p>
+            Yesterday's Workout Completed:{" "}
+            <strong
               style={{
-                display: "inline-block",
-                background: log.coachMessageRead === false ? "#dc2626" : "#16a34a",
-                color: "white",
-                borderRadius: 999,
-                padding: "3px 8px",
-                fontSize: 11,
-                fontWeight: "bold",
+                color:
+                  log.workoutCompleted === "No"
+                    ? "#dc2626"
+                    : log.workoutCompleted === "Modified"
+                    ? "#d97706"
+                    : log.workoutCompleted === "Yes"
+                    ? "#16a34a"
+                    : "#111827",
               }}
             >
-              {log.coachMessageRead === false ? "Unread" : "Read"}
-            </span>
-          </div>
-        )}
+              {log.workoutCompleted || "N/A"}
+            </strong>
+          </p>
+          <p>Planned RPE: {log.plannedRPE || "N/A"}</p>
+          <p>Yesterday’s RPE: {log.actualRPE || "N/A"}</p>
+          <p>RPE Difference: {rpeDifference.toFixed(1)}</p>
+          <p>RPE Adjustment: {rpeAdjustment.toFixed(2)}</p>
+          <p style={{ whiteSpace: "pre-wrap" }}>
+            Athlete Notes: {log.notes || "None"}
+          </p>
 
-        {showDelete && (
-          <button
-            onClick={() => handleDeleteAthleteLog(log.id)}
-            style={deleteButtonStyle}
-          >
-            Delete Log
-          </button>
-        )}
-      </div>
-    );
-  };
+          {/* Removed Adjusted Load, Compounded Load, and 14-Day Avg Load blocks */}
+
+          {renderCoachNoteBox(log)}
+
+          {log.coachNote && (
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                borderRadius: 12,
+                padding: 12,
+                marginTop: 10,
+                background: "#f9fafb",
+              }}
+            >
+              <p style={{ margin: "0 0 6px", color: "#374151" }}>
+                <strong>Last message:</strong> {log.coachNote}
+              </p>
+
+              <p style={{ margin: "0 0 6px", color: "#6b7280", fontSize: 13 }}>
+                Sent: {formatTimestamp(log.coachNoteUpdatedAt)}
+              </p>
+
+              <span
+                style={{
+                  display: "inline-block",
+                  background: log.coachMessageRead === false ? "#dc2626" : "#16a34a",
+                  color: "white",
+                  borderRadius: 999,
+                  padding: "3px 8px",
+                  fontSize: 11,
+                  fontWeight: "bold",
+                }}
+              >
+                {log.coachMessageRead === false ? "Unread" : "Read"}
+              </span>
+            </div>
+          )}
+
+          {showDelete && (
+            <button
+              onClick={() => handleDeleteAthleteLog(log.id)}
+              style={deleteButtonStyle}
+            >
+              Delete Log
+            </button>
+          )}
+        </div>
+      );
+    };
 
   const renderMailboxPanel = () => (
     <>
