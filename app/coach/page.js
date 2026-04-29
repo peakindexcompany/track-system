@@ -7,7 +7,7 @@ import {
   calculateAdjustedLoad,
   calculateCompoundedLoad,
   calculateReadinessRatio,
-} from "@/lib/readiness";
+} from "../../lib/readiness";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import {
   collection,
