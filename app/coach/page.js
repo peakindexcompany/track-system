@@ -348,9 +348,11 @@ export default function CoachDashboard() {
             ...log,
             daysAgo,
             adjustedLoad: calculateAdjustedLoad(
-              getSessionDuration(log),
               log.actualRPE,
-              log.plannedRPE
+              log.sleepQuality,
+              log.stress,
+              log.soreness,
+              log.mood
             ),
           };
         });
@@ -376,9 +378,11 @@ export default function CoachDashboard() {
           ...currentLog,
           adjustedLoad: Number(
             calculateAdjustedLoad(
-              getSessionDuration(currentLog),
               currentLog.actualRPE,
-              currentLog.plannedRPE
+              currentLog.sleepQuality,
+              currentLog.stress,
+              currentLog.soreness,
+              currentLog.mood
             ).toFixed(1)
           ),
           compoundedLoad: Number(compoundedLoad.toFixed(1)),

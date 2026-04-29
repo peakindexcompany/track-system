@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../lib/firebase";
+import { calculateAdjustedLoad } from "../../lib/readiness";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import {
   collection,
@@ -318,6 +319,13 @@ export default function AthleteDashboard() {
     }
 
     const readinessRatio = calculateReadinessRatio();
+    const dailyLoad = calculateAdjustedLoad(
+      actualRPE,
+      sleepQuality,
+      stress,
+      soreness,
+      mood
+    );
 
     const logData = {
       userId: user.uid,
@@ -330,6 +338,8 @@ export default function AthleteDashboard() {
       sessionGroup: selectedSession.sessionGroup || "All",
       plannedRPE: Number(plannedRPE || 0),
       actualRPE: Number(actualRPE || 0),
+      dailyLoad,
+      adjustedLoad: dailyLoad,
       sleepHours: Number(sleepHours || 0),
       sleepQuality: Number(sleepQuality || 0),
       stress: Number(stress || 0),
