@@ -273,6 +273,128 @@ export default function CoachDashboard() {
     });
   };
 
+  const getLogDateValue = (log) => {
+    if (log.sessionDate) {
+      return new Date(`${log.sessionDate}T12:00:00`);
+    }
+
+    if (log.createdAt?.toDate) {
+      return log.createdAt.toDate();
+    }
+
+    if (log.createdAt) {
+      return new Date(log.createdAt);
+    }
+
+    return null;
+  };
+
+  const getSessionDuration = (log) => {
+    return Number(
+      log.duration ||
+        log.sessionDuration ||
+        log.durationMinutes ||
+        log.minutes ||
+        60
+    );
+  };
+
+  const enhanceLogsWithCompoundedReadiness = (logs) => {
+    const grouped = {};
+
+    logs.forEach((log) => {
+      const key = log.userId || log.name || log.id;
+
+      if (!grouped[key]) {
+        grouped[key] = [];
+      }
+
+      grouped[key].push(log);
+    });
+
+    const enhancedLogsById = {};
+
+    Object.values(grouped).forEach((athleteLogsGroup) => {
+      const sortedOldestFirst = [...athleteLogsGroup].sort((a, b) => {
+        const dateA = getLogDateValue(a) || new Date(0);
+        const dateB = getLogDateValue(b) || new Date(0);
+        return dateA - dateB;
+      });
+
+      sortedOldestFirst.forEach((currentLog) => {
+        const currentDate = getLogDateValue(currentLog);
+
+        if (!currentDate) {
+          enhancedLogsById[currentLog.id] = currentLog;
+          return;
+        }
+
+        const eventGroup =
+          currentLog.eventGroup || sortedOldestFirst[0]?.eventGroup || "Mid-Distance";
+
+        const logsBeforeOrOnCurrentDate = sortedOldestFirst.filter((log) => {
+          const logDate = getLogDateValue(log);
+          return logDate && logDate <= currentDate;
+        });
+
+        const adjustedLogs = logsBeforeOrOnCurrentDate.map((log) => {
+          const logDate = getLogDateValue(log);
+          const daysAgo = Math.max(
+            0,
+            Math.round((currentDate - logDate) / (1000 * 60 * 60 * 24))
+          );
+
+          return {
+            ...log,
+            daysAgo,
+            adjustedLoad: calculateAdjustedLoad(
+              getSessionDuration(log),
+              log.actualRPE,
+              log.plannedRPE
+            ),
+          };
+        });
+
+        const recentLoadEntries = adjustedLogs.filter((log) => log.daysAgo <= 7);
+        const baselineLoadEntries = adjustedLogs.filter((log) => log.daysAgo <= 14);
+
+        const compoundedLoad = calculateCompoundedLoad(recentLoadEntries, eventGroup);
+        const avg14DayLoad =
+          baselineLoadEntries.length > 0
+            ? baselineLoadEntries.reduce(
+                (sum, log) => sum + Number(log.adjustedLoad || 0),
+                0
+              ) / baselineLoadEntries.length
+            : null;
+
+        const compoundedReadinessRatio = calculateReadinessRatio(
+          compoundedLoad,
+          avg14DayLoad
+        );
+
+        enhancedLogsById[currentLog.id] = {
+          ...currentLog,
+          adjustedLoad: Number(
+            calculateAdjustedLoad(
+              getSessionDuration(currentLog),
+              currentLog.actualRPE,
+              currentLog.plannedRPE
+            ).toFixed(1)
+          ),
+          compoundedLoad: Number(compoundedLoad.toFixed(1)),
+          avg14DayLoad: avg14DayLoad ? Number(avg14DayLoad.toFixed(1)) : null,
+          readinessRatio:
+            compoundedReadinessRatio !== null
+              ? Number(compoundedReadinessRatio.toFixed(2))
+              : currentLog.readinessRatio,
+          readinessModel: "Compounded",
+        };
+      });
+    });
+
+    return logs.map((log) => enhancedLogsById[log.id] || log);
+  };
+
   const fetchCoachData = async (code) => {
     const sessionsQuery = query(
       collection(db, "planned_sessions"),
@@ -1340,6 +1462,9 @@ export default function CoachDashboard() {
 
         <p style={{ color: readinessColor }}>
           Readiness Ratio: <strong>{log.readinessRatio || "N/A"}</strong>
+        </p>
+
+          Readiness Model: <strong>{log.readinessModel || "Standard"}</strong>
         </p>
 
         <p style={{ color: readinessColor, fontWeight: "bold" }}>
