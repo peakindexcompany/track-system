@@ -7,6 +7,7 @@ import {
   calculateAdjustedLoad,
   calculateCompoundedLoad,
   calculateReadinessRatio,
+  calculateAthleteReadinessSeries,
 } from "../../lib/readiness";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import {
@@ -304,11 +305,9 @@ export default function CoachDashboard() {
 
     logs.forEach((log) => {
       const key = log.userId || log.name || log.id;
-
       if (!grouped[key]) {
         grouped[key] = [];
       }
-
       grouped[key].push(log);
     });
 
@@ -321,8 +320,29 @@ export default function CoachDashboard() {
         return dateA - dateB;
       });
 
+      // Athlete Variability Model: Prepare input logs and compute series
+      const modelReadyLogs = sortedOldestFirst.map((log) => ({
+        ...log,
+        stress: Number(log.stress || 6),
+        soreness: Number(log.soreness || 6),
+        sleep: Number(log.sleepQuality || log.sleep || 6),
+        mood: Number(log.mood || 6),
+        coachRpe: Number(log.plannedRPE || log.coachRPE || 6),
+        athleteRpe: Number(log.actualRPE || log.athleteRPE || 6),
+      }));
+
+      const athleteReadinessSeries = calculateAthleteReadinessSeries(modelReadyLogs);
+      const athleteReadinessById = {};
+
+      athleteReadinessSeries.forEach((entry) => {
+        if (entry.id) {
+          athleteReadinessById[entry.id] = entry;
+        }
+      });
+
       sortedOldestFirst.forEach((currentLog) => {
         const currentDate = getLogDateValue(currentLog);
+        const modelEntry = athleteReadinessById[currentLog.id] || {};
 
         if (!currentDate) {
           enhancedLogsById[currentLog.id] = currentLog;
@@ -376,6 +396,30 @@ export default function CoachDashboard() {
 
         enhancedLogsById[currentLog.id] = {
           ...currentLog,
+          phi:
+            modelEntry.phi !== undefined && modelEntry.phi !== null
+              ? Number(modelEntry.phi.toFixed(1))
+              : null,
+          athV:
+            modelEntry.athV !== undefined && modelEntry.athV !== null
+              ? Number(modelEntry.athV.toFixed(1))
+              : null,
+          athV3DayAvg:
+            modelEntry.athV3DayAvg !== undefined && modelEntry.athV3DayAvg !== null
+              ? Number(modelEntry.athV3DayAvg.toFixed(1))
+              : null,
+          athV7DayAvg:
+            modelEntry.athV7DayAvg !== undefined && modelEntry.athV7DayAvg !== null
+              ? Number(modelEntry.athV7DayAvg.toFixed(1))
+              : null,
+          athV14DayAvg:
+            modelEntry.athV14DayAvg !== undefined && modelEntry.athV14DayAvg !== null
+              ? Number(modelEntry.athV14DayAvg.toFixed(1))
+              : null,
+          athV21DayAvg:
+            modelEntry.athV21DayAvg !== undefined && modelEntry.athV21DayAvg !== null
+              ? Number(modelEntry.athV21DayAvg.toFixed(1))
+              : null,
           adjustedLoad: Number(
             calculateAdjustedLoad(
               currentLog.actualRPE,
@@ -388,10 +432,12 @@ export default function CoachDashboard() {
           compoundedLoad: Number(compoundedLoad.toFixed(1)),
           avg14DayLoad: avg14DayLoad ? Number(avg14DayLoad.toFixed(1)) : null,
           readinessRatio:
-            compoundedReadinessRatio !== null
+            modelEntry.athV !== undefined && modelEntry.athV !== null
+              ? Number((modelEntry.athV / 100).toFixed(2))
+              : compoundedReadinessRatio !== null
               ? Number(Math.max(0, compoundedReadinessRatio).toFixed(2))
               : Math.max(0, Number(currentLog.readinessRatio || 0)),
-          readinessModel: "Compounded",
+          readinessModel: "Athlete Variability",
         };
       });
     });
@@ -1513,9 +1559,28 @@ export default function CoachDashboard() {
             Readiness Ratio: <strong>{Number.isFinite(safeReadinessRatio) ? safeReadinessRatio.toFixed(2) : "N/A"}</strong>
           </p>
 
-          <p>
-            Readiness Model: <strong>{log.readinessModel || "Standard"}</strong>
-          </p>
+          <p>Readiness Model:</p>
+
+          <div
+            style={{
+              border: "1px solid #e5e7eb",
+              borderRadius: 12,
+              padding: 12,
+              marginTop: 10,
+              marginBottom: 10,
+              background: "#f9fafb",
+            }}
+          >
+            <p style={{ margin: "0 0 6px", fontWeight: "bold" }}>
+              Athlete Variability Model
+            </p>
+            <p style={{ margin: "0 0 4px" }}>Daily Readiness: {log.phi ?? "N/A"}</p>
+            <p style={{ margin: "0 0 4px" }}>Athlete Variability: {log.athV ?? "N/A"}</p>
+            <p style={{ margin: "0 0 4px" }}>3-Day Avg: {log.athV3DayAvg ?? "N/A"}</p>
+            <p style={{ margin: "0 0 4px" }}>7-Day Avg: {log.athV7DayAvg ?? "N/A"}</p>
+            <p style={{ margin: "0 0 4px" }}>14-Day Avg: {log.athV14DayAvg ?? "N/A"}</p>
+            <p style={{ margin: 0 }}>21-Day Avg: {log.athV21DayAvg ?? "N/A"}</p>
+          </div>
 
           <p style={{ color: trend.color }}>
             Trend: <strong>{trend.symbol} {trend.label}</strong>
