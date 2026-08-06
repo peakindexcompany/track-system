@@ -1,0 +1,174 @@
+:root {
+  --bg: #07111f;
+  --bg2: #0d1b2a;
+  --card: rgba(14, 24, 38, 0.88);
+  --border: rgba(255, 255, 255, 0.08);
+  --primary: #2f7cff;
+  --primary-hover: #1d6cff;
+  --text: #ffffff;
+  --muted: #9ca8b8;
+}
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 48px 20px;
+  background:
+    radial-gradient(circle at top, #17365e 0%, transparent 45%),
+    linear-gradient(180deg, var(--bg2), var(--bg));
+  position: relative;
+  overflow: hidden;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(47,124,255,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47,124,255,.05) 1px, transparent 1px);
+  background-size: 80px 80px;
+  opacity: .45;
+}
+
+.card {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 520px;
+  border-radius: 28px;
+  background: rgba(7, 17, 31, 0.92);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow:
+    0 30px 80px rgba(0,0,0,.55),
+    0 0 80px rgba(47,124,255,.18);
+  overflow: hidden;
+}
+
+.logoContainer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.logo {
+  width: 280px;
+  height: 180px;
+  object-fit: cover;
+  object-position: center;
+  filter: drop-shadow(0 0 25px rgba(47,124,255,0.25));
+}
+
+.title {
+  text-align: center;
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin: 0;
+}
+
+.subtitle {
+  text-align: center;
+  color: #2f7cff;
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 10px;
+}
+
+.description {
+  text-align: center;
+  color: var(--muted);
+  margin: 16px auto 34px;
+  line-height: 1.6;
+  max-width: 390px;
+  font-size: 15px;
+}
+
+.socialButton {
+  width: 100%;
+  height: 56px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.googleButton {
+  background: rgba(255,255,255,0.08);
+  color: #ffffff;
+  border: 1px solid rgba(255,255,255,0.15);
+  margin-bottom: 14px;
+}
+
+.appleButton {
+  background: #000000;
+  color: #ffffff;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+
+.submitButton {
+  width: 100%;
+  height: 56px;
+  margin-top: 10px;
+  border-radius: 14px;
+  background: linear-gradient(135deg,#2f7cff,#1557d6);
+  color: #ffffff;
+  border: none;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow:
+    0 10px 30px rgba(47,124,255,.35);
+  transition: all .2s ease;
+}
+
+.toggleButton {
+  margin-left: 8px;
+  background: none;
+  border: none;
+  color: #2f7cff;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.input {
+  display: block;
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  background: rgba(255,255,255,0.06);
+  color: #ffffff;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px;
+  font-size: 15px;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.input:focus {
+  border-color: #2f7cff;
+  box-shadow: 0 0 0 3px rgba(47,124,255,0.18);
+}
+
+.passwordToggle {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  background: none;
+  border: none;
+  color: #b7c2d1;
+  cursor: pointer;
+}
