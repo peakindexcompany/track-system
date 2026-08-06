@@ -227,15 +227,15 @@ return (
     <div className={styles.card}>
   <div
     style={{
-      padding: "42px",
+      padding: "20px 32px",
     }}
   >
     <div className={styles.logoContainer}>
       <Image
-  src="/peak-index-logo-new.png"
+  src="/peak-index-logo-finalv2.png"
   alt="Peak Index"
   width={400}
-  height={400}
+height={400}
   className={styles.logo}
   priority
 />
@@ -243,54 +243,29 @@ return (
         {/* Header */}
 
         <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            marginBottom: 34,
-          }}
-        >
-
-          <h1
   style={{
-    margin: 0,
-    fontSize: 24,
-    fontWeight: 700,
-    letterSpacing: 1,
-    color: "#ffffff",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    marginTop: -20,
+    marginBottom: 10,
   }}
 >
-  Performance Readiness Platform
-</h1>
 
 <p
   style={{
-    marginTop: 12,
+    marginTop: -50,
     textAlign: "center",
     color: "#9ca8b8",
     fontSize: 15,
     lineHeight: 1.6,
   }}
 >
-  Monitor readiness. Optimize training.
-  Maximize performance.
+  Performance readiness, simplified.
 </p>
         </div>
 
         {/* Social Login */}
-
-        <div
-          style={{
-            textAlign: "center",
-            color: "#6b7280",
-            fontWeight: 600,
-            marginBottom: 18,
-          }}
-        >
-          {isSignup
-  ? "Create your account"
-  : "Sign in"}
-        </div>
 
         <button
           type="button"

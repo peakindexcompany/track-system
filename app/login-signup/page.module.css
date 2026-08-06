@@ -52,17 +52,13 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 200px;
-  overflow: hidden;
-  margin-bottom: 18px;
+  margin-bottom: 5px;
 }
 
 .logo {
-  width: 280px;
-  height: 180px;
-  object-fit: cover;
-  object-position: center;
-  filter: drop-shadow(0 0 25px rgba(47,124,255,0.25));
+  width: 335;
+  height: 335px;
+  object-fit: contain;
 }
 
 .title {
@@ -93,7 +89,7 @@
 
 .socialButton {
   width: 100%;
-  height: 56px;
+  height: 54px;
   border-radius: 14px;
   display: flex;
   align-items: center;
