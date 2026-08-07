@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import styles from "../dashboard.module.css";
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../lib/firebase";
 import {
@@ -23,6 +24,192 @@ import {
   updateDoc,
   onSnapshot,
 } from "firebase/firestore";
+
+const sortSessionsNewestFirst = (sessions) => {
+  return [...sessions].sort((a, b) => {
+    const dateA = a.sessionDate ? new Date(a.sessionDate) : new Date(0);
+    const dateB = b.sessionDate ? new Date(b.sessionDate) : new Date(0);
+    return dateB - dateA;
+  });
+};
+
+const sortLogsNewestFirst = (logs) => {
+  return [...logs].sort((a, b) => {
+    const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(0);
+    const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(0);
+    return dateB - dateA;
+  });
+};
+
+const getLogDateValue = (log) => {
+  if (log.sessionDate) {
+    return new Date(`${log.sessionDate}T12:00:00`);
+  }
+
+  if (log.createdAt?.toDate) {
+    return log.createdAt.toDate();
+  }
+
+  if (log.createdAt) {
+    return new Date(log.createdAt);
+  }
+
+  return null;
+};
+
+const getSessionDuration = (log) => {
+  return Number(
+    log.duration ||
+      log.sessionDuration ||
+      log.durationMinutes ||
+      log.minutes ||
+      60
+  );
+};
+
+const enhanceLogsWithCompoundedReadiness = (logs) => {
+  const grouped = {};
+
+  logs.forEach((log) => {
+    const key = log.userId || log.name || log.id;
+    if (!grouped[key]) {
+      grouped[key] = [];
+    }
+    grouped[key].push(log);
+  });
+
+  const enhancedLogsById = {};
+
+  Object.values(grouped).forEach((athleteLogsGroup) => {
+    const sortedOldestFirst = [...athleteLogsGroup].sort((a, b) => {
+      const dateA = getLogDateValue(a) || new Date(0);
+      const dateB = getLogDateValue(b) || new Date(0);
+      return dateA - dateB;
+    });
+
+    const modelReadyLogs = sortedOldestFirst.map((log) => ({
+      ...log,
+      stress: Number(log.stress || 6),
+      soreness: Number(log.soreness || 6),
+      sleep: Number(log.sleepQuality || log.sleep || 6),
+      mood: Number(log.mood || 6),
+      coachRpe: Number(log.plannedRPE || log.coachRPE || 6),
+      athleteRpe: Number(log.actualRPE || log.athleteRPE || 6),
+    }));
+
+    const athleteReadinessSeries = calculateAthleteReadinessSeries(modelReadyLogs);
+    const athleteReadinessById = {};
+
+    athleteReadinessSeries.forEach((entry) => {
+      if (entry.id) {
+        athleteReadinessById[entry.id] = entry;
+      }
+    });
+
+    sortedOldestFirst.forEach((currentLog) => {
+      const currentDate = getLogDateValue(currentLog);
+      const modelEntry = athleteReadinessById[currentLog.id] || {};
+
+      if (!currentDate) {
+        enhancedLogsById[currentLog.id] = currentLog;
+        return;
+      }
+
+      const eventGroup =
+        currentLog.eventGroup || sortedOldestFirst[0]?.eventGroup || "Mid-Distance";
+
+      const logsBeforeOrOnCurrentDate = sortedOldestFirst.filter((log) => {
+        const logDate = getLogDateValue(log);
+        return logDate && logDate <= currentDate;
+      });
+
+      const adjustedLogs = logsBeforeOrOnCurrentDate.map((log) => {
+        const logDate = getLogDateValue(log);
+        const daysAgo = Math.max(
+          0,
+          Math.round((currentDate - logDate) / (1000 * 60 * 60 * 24))
+        );
+
+        return {
+          ...log,
+          daysAgo,
+          adjustedLoad: calculateAdjustedLoad(
+            log.actualRPE,
+            log.sleepQuality,
+            log.stress,
+            log.soreness,
+            log.mood
+          ),
+        };
+      });
+
+      const recentLoadEntries = adjustedLogs.filter((log) => log.daysAgo <= 7);
+      const baselineLoadEntries = adjustedLogs.filter((log) => log.daysAgo <= 14);
+
+      const compoundedLoad = calculateCompoundedLoad(recentLoadEntries, eventGroup);
+      const avg14DayLoad =
+        baselineLoadEntries.length > 0
+          ? baselineLoadEntries.reduce(
+              (sum, log) => sum + Number(log.adjustedLoad || 0),
+              0
+            ) / baselineLoadEntries.length
+          : null;
+
+      const compoundedReadinessRatio = calculateReadinessRatio(
+        compoundedLoad,
+        avg14DayLoad
+      );
+
+      enhancedLogsById[currentLog.id] = {
+        ...currentLog,
+        phi:
+          modelEntry.phi !== undefined && modelEntry.phi !== null
+            ? Number(modelEntry.phi.toFixed(1))
+            : null,
+        athV:
+          modelEntry.athV !== undefined && modelEntry.athV !== null
+            ? Number(modelEntry.athV.toFixed(1))
+            : null,
+        athV3DayAvg:
+          modelEntry.athV3DayAvg !== undefined && modelEntry.athV3DayAvg !== null
+            ? Number(modelEntry.athV3DayAvg.toFixed(1))
+            : null,
+        athV7DayAvg:
+          modelEntry.athV7DayAvg !== undefined && modelEntry.athV7DayAvg !== null
+            ? Number(modelEntry.athV7DayAvg.toFixed(1))
+            : null,
+        athV14DayAvg:
+          modelEntry.athV14DayAvg !== undefined && modelEntry.athV14DayAvg !== null
+            ? Number(modelEntry.athV14DayAvg.toFixed(1))
+            : null,
+        athV21DayAvg:
+          modelEntry.athV21DayAvg !== undefined && modelEntry.athV21DayAvg !== null
+            ? Number(modelEntry.athV21DayAvg.toFixed(1))
+            : null,
+        adjustedLoad: Number(
+          calculateAdjustedLoad(
+            currentLog.actualRPE,
+            currentLog.sleepQuality,
+            currentLog.stress,
+            currentLog.soreness,
+            currentLog.mood
+          ).toFixed(1)
+        ),
+        compoundedLoad: Number(compoundedLoad.toFixed(1)),
+        avg14DayLoad: avg14DayLoad ? Number(avg14DayLoad.toFixed(1)) : null,
+        readinessRatio:
+          modelEntry.athV !== undefined && modelEntry.athV !== null
+            ? Number((modelEntry.athV / 100).toFixed(2))
+            : compoundedReadinessRatio !== null
+            ? Number(Math.max(0, compoundedReadinessRatio).toFixed(2))
+            : Math.max(0, Number(currentLog.readinessRatio || 0)),
+        readinessModel: "Athlete Variability",
+      };
+    });
+  });
+
+  return logs.map((log) => enhancedLogsById[log.id] || log);
+};
 
 export default function CoachDashboard() {
   const router = useRouter();
@@ -257,230 +444,6 @@ export default function CoachDashboard() {
       }
     };
   }, [router]);
-
-  const sortSessionsNewestFirst = (sessions) => {
-    return [...sessions].sort((a, b) => {
-      const dateA = a.sessionDate ? new Date(a.sessionDate) : new Date(0);
-      const dateB = b.sessionDate ? new Date(b.sessionDate) : new Date(0);
-      return dateB - dateA;
-    });
-  };
-
-  const sortLogsNewestFirst = (logs) => {
-    return [...logs].sort((a, b) => {
-      const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(0);
-      const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(0);
-      return dateB - dateA;
-    });
-  };
-
-  const getLogDateValue = (log) => {
-    if (log.sessionDate) {
-      return new Date(`${log.sessionDate}T12:00:00`);
-    }
-
-    if (log.createdAt?.toDate) {
-      return log.createdAt.toDate();
-    }
-
-    if (log.createdAt) {
-      return new Date(log.createdAt);
-    }
-
-    return null;
-  };
-
-  const getSessionDuration = (log) => {
-    return Number(
-      log.duration ||
-        log.sessionDuration ||
-        log.durationMinutes ||
-        log.minutes ||
-        60
-    );
-  };
-
-  const enhanceLogsWithCompoundedReadiness = (logs) => {
-    const grouped = {};
-
-    logs.forEach((log) => {
-      const key = log.userId || log.name || log.id;
-      if (!grouped[key]) {
-        grouped[key] = [];
-      }
-      grouped[key].push(log);
-    });
-
-    const enhancedLogsById = {};
-
-    Object.values(grouped).forEach((athleteLogsGroup) => {
-      const sortedOldestFirst = [...athleteLogsGroup].sort((a, b) => {
-        const dateA = getLogDateValue(a) || new Date(0);
-        const dateB = getLogDateValue(b) || new Date(0);
-        return dateA - dateB;
-      });
-
-      // Athlete Variability Model: Prepare input logs and compute series
-      const modelReadyLogs = sortedOldestFirst.map((log) => ({
-        ...log,
-        stress: Number(log.stress || 6),
-        soreness: Number(log.soreness || 6),
-        sleep: Number(log.sleepQuality || log.sleep || 6),
-        mood: Number(log.mood || 6),
-        coachRpe: Number(log.plannedRPE || log.coachRPE || 6),
-        athleteRpe: Number(log.actualRPE || log.athleteRPE || 6),
-      }));
-
-      const athleteReadinessSeries = calculateAthleteReadinessSeries(modelReadyLogs);
-      const athleteReadinessById = {};
-
-      athleteReadinessSeries.forEach((entry) => {
-        if (entry.id) {
-          athleteReadinessById[entry.id] = entry;
-        }
-      });
-
-      sortedOldestFirst.forEach((currentLog) => {
-        const currentDate = getLogDateValue(currentLog);
-        const modelEntry = athleteReadinessById[currentLog.id] || {};
-
-        if (!currentDate) {
-          enhancedLogsById[currentLog.id] = currentLog;
-          return;
-        }
-
-        const eventGroup =
-          currentLog.eventGroup || sortedOldestFirst[0]?.eventGroup || "Mid-Distance";
-
-        const logsBeforeOrOnCurrentDate = sortedOldestFirst.filter((log) => {
-          const logDate = getLogDateValue(log);
-          return logDate && logDate <= currentDate;
-        });
-
-        const adjustedLogs = logsBeforeOrOnCurrentDate.map((log) => {
-          const logDate = getLogDateValue(log);
-          const daysAgo = Math.max(
-            0,
-            Math.round((currentDate - logDate) / (1000 * 60 * 60 * 24))
-          );
-
-          return {
-            ...log,
-            daysAgo,
-            adjustedLoad: calculateAdjustedLoad(
-              log.actualRPE,
-              log.sleepQuality,
-              log.stress,
-              log.soreness,
-              log.mood
-            ),
-          };
-        });
-
-        const recentLoadEntries = adjustedLogs.filter((log) => log.daysAgo <= 7);
-        const baselineLoadEntries = adjustedLogs.filter((log) => log.daysAgo <= 14);
-
-        const compoundedLoad = calculateCompoundedLoad(recentLoadEntries, eventGroup);
-        const avg14DayLoad =
-          baselineLoadEntries.length > 0
-            ? baselineLoadEntries.reduce(
-                (sum, log) => sum + Number(log.adjustedLoad || 0),
-                0
-              ) / baselineLoadEntries.length
-            : null;
-
-        const compoundedReadinessRatio = calculateReadinessRatio(
-          compoundedLoad,
-          avg14DayLoad
-        );
-
-        enhancedLogsById[currentLog.id] = {
-          ...currentLog,
-          phi:
-            modelEntry.phi !== undefined && modelEntry.phi !== null
-              ? Number(modelEntry.phi.toFixed(1))
-              : null,
-          athV:
-            modelEntry.athV !== undefined && modelEntry.athV !== null
-              ? Number(modelEntry.athV.toFixed(1))
-              : null,
-          athV3DayAvg:
-            modelEntry.athV3DayAvg !== undefined && modelEntry.athV3DayAvg !== null
-              ? Number(modelEntry.athV3DayAvg.toFixed(1))
-              : null,
-          athV7DayAvg:
-            modelEntry.athV7DayAvg !== undefined && modelEntry.athV7DayAvg !== null
-              ? Number(modelEntry.athV7DayAvg.toFixed(1))
-              : null,
-          athV14DayAvg:
-            modelEntry.athV14DayAvg !== undefined && modelEntry.athV14DayAvg !== null
-              ? Number(modelEntry.athV14DayAvg.toFixed(1))
-              : null,
-          athV21DayAvg:
-            modelEntry.athV21DayAvg !== undefined && modelEntry.athV21DayAvg !== null
-              ? Number(modelEntry.athV21DayAvg.toFixed(1))
-              : null,
-          adjustedLoad: Number(
-            calculateAdjustedLoad(
-              currentLog.actualRPE,
-              currentLog.sleepQuality,
-              currentLog.stress,
-              currentLog.soreness,
-              currentLog.mood
-            ).toFixed(1)
-          ),
-          compoundedLoad: Number(compoundedLoad.toFixed(1)),
-          avg14DayLoad: avg14DayLoad ? Number(avg14DayLoad.toFixed(1)) : null,
-          readinessRatio:
-            modelEntry.athV !== undefined && modelEntry.athV !== null
-              ? Number((modelEntry.athV / 100).toFixed(2))
-              : compoundedReadinessRatio !== null
-              ? Number(Math.max(0, compoundedReadinessRatio).toFixed(2))
-              : Math.max(0, Number(currentLog.readinessRatio || 0)),
-          readinessModel: "Athlete Variability",
-        };
-      });
-    });
-
-    return logs.map((log) => enhancedLogsById[log.id] || log);
-  };
-
-  const fetchCoachData = async (code) => {
-    const sessionsQuery = query(
-      collection(db, "planned_sessions"),
-      where("teamCode", "==", code)
-    );
-
-    const sessionsSnap = await getDocs(sessionsQuery);
-    const sessionsData = sessionsSnap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
-
-    setPlannedSessions(sortSessionsNewestFirst(sessionsData));
-
-    const logsQuery = query(
-      collection(db, "readiness_logs"),
-      where("teamCode", "==", code)
-    );
-
-    const logsSnap = await getDocs(logsQuery);
-    const logsData = logsSnap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
-
-    const sortedLogs = sortLogsNewestFirst(logsData);
-    const enhancedLogs = enhanceLogsWithCompoundedReadiness(sortedLogs);
-    setAthleteLogs(enhancedLogs);
-
-    const notesObject = {};
-    enhancedLogs.forEach((log) => {
-      notesObject[log.id] = log.coachNote || "";
-    });
-
-    setCoachNotes(notesObject);
-  };
 
   const isAlertLog = (log) => {
     return (
@@ -1035,26 +998,6 @@ export default function CoachDashboard() {
     "Multi",
   ];
 
-  const getEventGroupSummary = () => {
-    return eventGroupOrder.map((group) => {
-      const groupLogs = athleteLogs.filter((log) => log.eventGroup === group);
-
-      const athleteNames = Array.from(
-        new Set(
-          groupLogs
-            .map((log) => log.name)
-            .filter((name) => name && String(name).trim() !== "")
-        )
-      );
-
-      return {
-        group,
-        athleteCount: athleteNames.length,
-        logCount: groupLogs.length,
-        alertCount: groupLogs.filter((log) => isAlertLog(log)).length,
-      };
-    });
-  };
     const applyFilters = (logs) => {
     return logs.filter((log) => {
       const nameMatch = String(log.name || "")
@@ -1098,104 +1041,28 @@ export default function CoachDashboard() {
     router.push("/");
   };
 
+  const openLogsWithFilters = ({
+    name = "",
+    eventGroup = "All",
+    alertStatus = "All",
+  } = {}) => {
+    setActiveTab("logs");
+    setFilterName(name);
+    setFilterEventGroup(eventGroup);
+    setFilterAlertStatus(alertStatus);
+    requestAnimationFrame(scrollToLogsSection);
+  };
+
   const cardStyle = {
-    border: "1px solid #e5e7eb",
-    borderRadius: 14,
-    padding: isMobile ? 14 : 16,
-    marginBottom: 16,
-    background: "white",
-    boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-  };
-
-  const inputStyle = {
-    display: "block",
-    width: "100%",
-    maxWidth: isMobile ? "100%" : 430,
-    padding: isMobile ? 12 : 10,
-    marginBottom: 10,
-    border: "1px solid #d1d5db",
-    borderRadius: 10,
-    fontSize: 14,
-    boxSizing: "border-box",
-  };
-
-  const filterInputStyle = {
-    padding: isMobile ? 12 : 10,
-    marginRight: isMobile ? 0 : 8,
-    marginBottom: 8,
-    border: "1px solid #d1d5db",
-    borderRadius: 10,
-    fontSize: 14,
-    minWidth: isMobile ? "100%" : 180,
-    width: isMobile ? "100%" : undefined,
-    boxSizing: "border-box",
-  };
-
-  const noteInputStyle = {
-    display: "block",
-    width: "100%",
-    maxWidth: 620,
-    padding: 10,
-    marginTop: 8,
-    marginBottom: 8,
-    border: "1px solid #d1d5db",
-    borderRadius: 10,
-    minHeight: 70,
-    fontSize: 14,
-    boxSizing: "border-box",
-  };
-
-  const buttonStyle = {
-    padding: "10px 14px",
-    border: "none",
-    borderRadius: 10,
-    background: "#111827",
-    color: "white",
-    cursor: "pointer",
-    marginRight: isMobile ? 0 : 8,
-    marginBottom: 8,
-    width: isMobile ? "100%" : undefined,
-    minHeight: 42,
-  };
-
-  const secondaryButtonStyle = {
-    padding: "10px 14px",
-    border: "1px solid #d1d5db",
-    borderRadius: 10,
-    background: "white",
-    color: "#111827",
-    cursor: "pointer",
-    marginRight: isMobile ? 0 : 8,
-    marginBottom: 8,
-    width: isMobile ? "100%" : undefined,
-    minHeight: 42,
-  };
-
-  const deleteButtonStyle = {
-    padding: "8px 12px",
-    border: "none",
-    borderRadius: 10,
-    background: "#dc2626",
-    color: "white",
-    cursor: "pointer",
-    marginTop: 8,
-    marginRight: isMobile ? 0 : 8,
-    width: isMobile ? "100%" : undefined,
-    minHeight: 42,
-  };
-
-  const editButtonStyle = {
-    padding: "8px 12px",
-    border: "none",
-    borderRadius: 10,
-    background: "#2563eb",
-    color: "white",
-    cursor: "pointer",
-    marginTop: 8,
-    marginRight: isMobile ? 0 : 8,
-    width: isMobile ? "100%" : undefined,
-    minHeight: 42,
-  };
+  border: "1px solid rgba(148,163,184,0.18)",
+  borderRadius: 22,
+  padding: isMobile ? 14 : 20,
+  marginBottom: 18,
+  background: "rgba(15,23,42,0.75)",
+  boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
+  backdropFilter: "blur(18px)",
+  color: "#f8fafc",
+};
 
   const badgeStyle = (color) => ({
     display: "inline-block",
@@ -1207,66 +1074,12 @@ export default function CoachDashboard() {
     fontSize: 13,
   });
 
-  const tabStyle = (tab) => ({
-    padding: "10px 14px",
-    border: "1px solid #d1d5db",
-    borderRadius: 10,
-    background: activeTab === tab ? "#111827" : "white",
-    color: activeTab === tab ? "white" : "#111827",
-    cursor: "pointer",
-    marginRight: isMobile ? 0 : 8,
-    marginBottom: 8,
-    flex: isMobile ? "1 1 100%" : undefined,
-    minHeight: 42,
-  });
-
-  const mailboxButtonStyle = {
-    position: "relative",
-    border: "1px solid #d1d5db",
-    borderRadius: 999,
-    background: "white",
-    color: "#111827",
-    cursor: "pointer",
-    width: 44,
-    height: 44,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-    boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-  };
-
-  const mailboxOverlayStyle = {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(17, 24, 39, 0.35)",
-    zIndex: 50,
-    display: mailboxOpen ? "block" : "none",
-  };
-
-  const mailboxPanelStyle = {
-    position: "fixed",
-    top: 0,
-    right: mailboxOpen ? 0 : isMobile ? "-100%" : -420,
-    width: "100%",
-    maxWidth: isMobile ? "100%" : 420,
-    height: "100vh",
-    background: "white",
-    zIndex: 60,
-    boxShadow: "-8px 0 20px rgba(0,0,0,0.16)",
-    padding: isMobile ? 16 : 20,
-    overflowY: "auto",
-    transition: "right 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-    boxSizing: "border-box",
-  };
-
   const athleteAverages = getAthleteAverages();
   const filteredAthleteLogs = applyFilters(athleteLogs);
   const eventGroupOptions = getUniqueEventGroups();
   const atRiskAthletes = getAtRiskAthletes();
   const dailySummary = getDailySummary();
   const todaysPlannedSessions = getTodaysPlannedSessions();
-  const eventGroupSummary = getEventGroupSummary();
   const getMissedWorkoutAthletesThisWeek = () => {
     const now = new Date();
     const weekAgo = new Date();
@@ -1456,18 +1269,19 @@ export default function CoachDashboard() {
   );
 
   const renderFilters = () => (
-    <div style={cardStyle}>
-      <h3 style={{ marginTop: 0 }}>Filters</h3>
+    <div className={styles.dashboardCard}>
+      <h3 className={styles.dashboardHeadingReset}>Filters</h3>
 
       <input
-        style={filterInputStyle}
+        className={styles.dashboardInput}
         placeholder="Search athlete name"
         value={filterName}
         onChange={(e) => setFilterName(e.target.value)}
       />
 
       <select
-        style={filterInputStyle}
+        className={styles.dashboardFilterInput}
+        style={{ width: isMobile ? "100%" : undefined }}
         value={filterEventGroup}
         onChange={(e) => setFilterEventGroup(e.target.value)}
       >
@@ -1479,7 +1293,8 @@ export default function CoachDashboard() {
       </select>
 
       <select
-        style={filterInputStyle}
+        className={styles.dashboardFilterInput}
+        style={{ width: isMobile ? "100%" : undefined }}
         value={filterAlertStatus}
         onChange={(e) => setFilterAlertStatus(e.target.value)}
       >
@@ -1488,7 +1303,7 @@ export default function CoachDashboard() {
         <option value="No Alerts">No Alerts</option>
       </select>
 
-      <button onClick={handleClearFilters} style={secondaryButtonStyle}>
+      <button onClick={handleClearFilters} className={styles.dashboardButtonSecondary}>
         Clear Filters
       </button>
     </div>
@@ -1501,7 +1316,7 @@ export default function CoachDashboard() {
       </p>
 
       <textarea
-        style={noteInputStyle}
+        className={styles.dashboardTextarea}
         placeholder="Send a message or feedback to this athlete..."
         value={coachNotes[log.id] || ""}
         onChange={(e) =>
@@ -1514,7 +1329,7 @@ export default function CoachDashboard() {
 
       <button
         onClick={() => handleSendMessage(log.id)}
-        style={editButtonStyle}
+        className={styles.dashboardButtonAccent}
       >
         Send Message
       </button>
@@ -1540,10 +1355,10 @@ export default function CoachDashboard() {
             borderRadius: 14,
             padding: 14,
             marginBottom: 14,
-            background: "#ffffff",
+            background: "rgba(255,255,255,0.02)",
           }}
         >
-          <p style={{ marginTop: 0 }}>
+          <p className={styles.dashboardHeadingReset}>
             <span style={badgeStyle(readinessColor)}>{readinessStatus}</span>
           </p>
 
@@ -1561,16 +1376,8 @@ export default function CoachDashboard() {
 
           <p>Readiness Model:</p>
 
-          <div
-            style={{
-              border: "1px solid #e5e7eb",
-              borderRadius: 12,
-              padding: 12,
-              marginTop: 10,
-              marginBottom: 10,
-              background: "#f9fafb",
-            }}
-          >
+          <div className={styles.smallCard}>
+
             <p style={{ margin: "0 0 6px", fontWeight: "bold" }}>
               Athlete Variability Model
             </p>
@@ -1592,7 +1399,7 @@ export default function CoachDashboard() {
 
           <p>Should Train Today: {log.shouldTrainToday || "N/A"}</p>
           <p>
-            Yesterday's Workout Completed:{" "}
+            Yesterday&apos;s Workout Completed:{" "}
             <strong
               style={{
                 color:
@@ -1621,20 +1428,13 @@ export default function CoachDashboard() {
           {renderCoachNoteBox(log)}
 
           {log.coachNote && (
-            <div
-              style={{
-                border: "1px solid #e5e7eb",
-                borderRadius: 12,
-                padding: 12,
-                marginTop: 10,
-                background: "#f9fafb",
-              }}
-            >
-              <p style={{ margin: "0 0 6px", color: "#374151" }}>
+            <div className={styles.smallCard}>
+
+              <p style={{ margin: "0 0 6px", color: "#d1d5db" }}>
                 <strong>Last message:</strong> {log.coachNote}
               </p>
 
-              <p style={{ margin: "0 0 6px", color: "#6b7280", fontSize: 13 }}>
+              <p style={{ margin: "0 0 6px", color: "#9ca8b8", fontSize: 13 }}>
                 Sent: {formatTimestamp(log.coachNoteUpdatedAt)}
               </p>
 
@@ -1657,7 +1457,7 @@ export default function CoachDashboard() {
           {showDelete && (
             <button
               onClick={() => handleDeleteAthleteLog(log.id)}
-              style={deleteButtonStyle}
+              className={styles.dashboardButtonDanger}
             >
               Delete Log
             </button>
@@ -1668,9 +1468,16 @@ export default function CoachDashboard() {
 
   const renderMailboxPanel = () => (
     <>
-      <div style={mailboxOverlayStyle} onClick={handleCloseMailbox} />
+      <div
+        className={styles.dashboardModalOverlay}
+        style={{ display: mailboxOpen ? "block" : "none" }}
+        onClick={handleCloseMailbox}
+      />
 
-      <aside style={mailboxPanelStyle}>
+      <aside
+        className={styles.dashboardDrawerPanel}
+        style={{ right: mailboxOpen ? 0 : isMobile ? "-100%" : -420 }}
+      >
         <div
           style={{
             display: "flex",
@@ -1680,8 +1487,8 @@ export default function CoachDashboard() {
           }}
         >
           <div>
-            <h2 style={{ margin: 0 }}>Mailbox</h2>
-            <p style={{ margin: "4px 0 0", color: "#6b7280" }}>
+            <h2 className={styles.dashboardHeadingReset}>Mailbox</h2>
+            <p className={styles.dashboardSubtitle}>
               {unreadMailboxNewestFirst.length} unread notification
               {unreadMailboxNewestFirst.length === 1 ? "" : "s"}
             </p>
@@ -1689,38 +1496,24 @@ export default function CoachDashboard() {
 
           <button
             onClick={handleCloseMailbox}
-            style={{
-              border: "1px solid #d1d5db",
-              background: "white",
-              borderRadius: 999,
-              width: 36,
-              height: 36,
-              cursor: "pointer",
-              fontSize: 18,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
+            className={styles.dashboardCloseButton}
           >
             ×
           </button>
         </div>
 
         {unreadMailboxNewestFirst.length > 0 && (
-          <button onClick={markAllMailboxRead} style={secondaryButtonStyle}>
+          <button
+            onClick={markAllMailboxRead}
+            className={`${styles.dashboardButtonSecondary} ${styles.dashboardButtonFullWidth}`}
+          >
             Mark All Read
           </button>
         )}
 
         {unreadMailboxNewestFirst.length === 0 ? (
-          <div
-            style={{
-              border: "1px solid #e5e7eb",
-              borderRadius: 14,
-              padding: 16,
-              background: "#f9fafb",
-            }}
-          >
+          <div className={styles.smallCard}>
+
             <p style={{ margin: 0, fontWeight: "bold" }}>All caught up.</p>
             <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
               No unread notifications.
@@ -1731,12 +1524,12 @@ export default function CoachDashboard() {
             <div
               key={item.id}
               style={{
-                border: "1px solid #fecaca",
+                border: "1px solid rgba(220, 38, 38, 0.3)",
                 borderRadius: 16,
                 padding: 16,
                 marginBottom: 12,
-                background: "#fff7f7",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                background: "rgba(220, 38, 38, 0.12)",
+                boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
               }}
             >
               <div
@@ -1767,12 +1560,12 @@ export default function CoachDashboard() {
                 </span>
               </div>
 
-              <p style={{ color: "#374151", marginTop: 0 }}>{item.message}</p>
+              <p style={{ color: "#d1d5db", marginTop: 0 }}>{item.message}</p>
 
               <div
                 style={{
-                  background: "white",
-                  border: "1px solid #fee2e2",
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(220, 38, 38, 0.18)",
                   borderRadius: 12,
                   padding: 12,
                   marginTop: 10,
@@ -1792,7 +1585,7 @@ export default function CoachDashboard() {
                   {item.log.shouldTrainToday || "N/A"}
                 </p>
                 <p style={{ margin: "0 0 6px" }}>
-                  <strong>Yesterday's Workout Completed:</strong>{" "}
+                  <strong>Yesterday&apos;s Workout Completed:</strong>{" "}
                   {item.log.workoutCompleted || "N/A"}
                 </p>
                 <p style={{ margin: 0 }}>
@@ -1804,16 +1597,11 @@ export default function CoachDashboard() {
               <button
                 onClick={() => {
                   markMailboxItemRead(item.id);
-                  setActiveTab("logs");
-                  setFilterName(item.athleteName);
-                  setFilterAlertStatus("Alerts Only");
+                  openLogsWithFilters({ name: item.athleteName, alertStatus: "Alerts Only" });
                   setMailboxOpen(false);
                 }}
-                style={{
-                  ...buttonStyle,
-                  width: "100%",
-                  marginTop: 10,
-                }}
+                className={`${styles.dashboardButton} ${styles.dashboardButtonFullWidth}`}
+                style={{ marginTop: 10 }}
               >
                 Open Alert
               </button>
@@ -1825,14 +1613,8 @@ export default function CoachDashboard() {
   );
 
   return (
-    <main
-      style={{
-        padding: isMobile ? 14 : 24,
-        fontFamily: "Arial, sans-serif",
-        background: "#f9fafb",
-        minHeight: "100vh",
-      }}
-    >
+  <div className={styles.dashboardPage}>
+    
       {renderMailboxPanel()}
 
       {groupMessageOpen && (
@@ -1850,15 +1632,9 @@ export default function CoachDashboard() {
           onClick={() => setGroupMessageOpen(false)}
         >
           <div
-            style={{
-              background: "white",
-              borderRadius: 16,
-              padding: 18,
-              width: "100%",
-              maxWidth: 520,
-              boxShadow: "0 12px 28px rgba(0,0,0,0.22)",
-            }}
+            className={styles.dashboardModalContent}
             onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 520 }}
           >
             <div
               style={{
@@ -1870,40 +1646,22 @@ export default function CoachDashboard() {
               }}
             >
               <div>
-                <h2 style={{ margin: 0 }}>Message Group</h2>
-                <p style={{ margin: "4px 0 0", color: "#6b7280" }}>
+                <h2 className={styles.dashboardHeadingReset}>Message Group</h2>
+                <p className={styles.dashboardSubtitle}>
                   Send one message to the latest log for each athlete in this group.
                 </p>
               </div>
 
               <button
                 onClick={() => setGroupMessageOpen(false)}
-                style={{
-                  border: "1px solid #d1d5db",
-                  background: "white",
-                  borderRadius: 999,
-                  width: 36,
-                  height: 36,
-                  cursor: "pointer",
-                  fontSize: 18,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
+                className={styles.dashboardCloseButton}
               >
                 ×
               </button>
             </div>
 
-            <div
-              style={{
-                border: "1px solid #e5e7eb",
-                borderRadius: 12,
-                padding: 12,
-                background: "#f9fafb",
-                marginBottom: 12,
-              }}
-            >
+            <div className={styles.smallCard}>
+
               <p style={{ margin: "0 0 6px", fontWeight: "bold" }}>
                 Group: {selectedGroupForMessage || "None selected"}
               </p>
@@ -1914,11 +1672,8 @@ export default function CoachDashboard() {
             </div>
 
             <textarea
-              style={{
-                ...noteInputStyle,
-                maxWidth: "100%",
-                minHeight: 120,
-              }}
+              className={styles.dashboardTextarea}
+              style={{ minHeight: 120 }}
               placeholder="Write a message to this group..."
               value={groupMessage}
               onChange={(e) => setGroupMessage(e.target.value)}
@@ -1931,7 +1686,7 @@ export default function CoachDashboard() {
                 flexDirection: isMobile ? "column" : "row",
               }}
             >
-              <button onClick={handleSendGroupMessage} style={buttonStyle}>
+              <button onClick={handleSendGroupMessage} className={styles.dashboardButton}>
                 Send Group Message
               </button>
 
@@ -1941,7 +1696,7 @@ export default function CoachDashboard() {
                   setSelectedGroupForMessage("");
                   setGroupMessageOpen(false);
                 }}
-                style={secondaryButtonStyle}
+                className={styles.dashboardButtonSecondary}
               >
                 Cancel
               </button>
@@ -1972,7 +1727,7 @@ export default function CoachDashboard() {
         </div>
       )}
 
-      <div style={{ maxWidth: 1000, margin: "0 auto", width: "100%" }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", width: "100%", marginBottom: 20 }}>
         <div
           style={{
             display: "flex",
@@ -1988,10 +1743,10 @@ export default function CoachDashboard() {
                 type="button"
                 onClick={() => setCoachMenuOpen((current) => !current)}
                 style={{
-                  border: "1px solid #d1d5db",
+                  border: "1px solid rgba(148,163,184,0.18)",
                   borderRadius: 12,
-                  background: "white",
-                  color: "#111827",
+                  background: "rgba(255,255,255,0.08)",
+                  color: "#f8fafc",
                   cursor: "pointer",
                   width: 44,
                   height: 44,
@@ -1999,7 +1754,7 @@ export default function CoachDashboard() {
                   alignItems: "center",
                   justifyContent: "center",
                   fontSize: 24,
-                  boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+                  boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
                 }}
                 aria-label="Open coach menu"
               >
@@ -2008,17 +1763,14 @@ export default function CoachDashboard() {
 
               {coachMenuOpen && (
                 <div
+                  className={styles.smallCard}
                   style={{
-                    position: "absolute",
-                    top: 52,
-                    left: 0,
-                    background: "white",
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 14,
-                    boxShadow: "0 10px 25px rgba(0,0,0,0.14)",
-                    padding: 8,
-                    zIndex: 40,
-                    minWidth: 210,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    marginTop: 12,
+                    padding: 16,
+                    minWidth: 220,
                   }}
                 >
               {[
@@ -2034,19 +1786,9 @@ export default function CoachDashboard() {
                         setActiveTab(item.key);
                         setCoachMenuOpen(false);
                       }}
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        textAlign: "left",
-                        border: "none",
-                        borderRadius: 10,
-                        padding: "12px 14px",
-                        background: activeTab === item.key ? "#111827" : "white",
-                        color: activeTab === item.key ? "white" : "#111827",
-                        cursor: "pointer",
-                        fontSize: 15,
-                        fontWeight: activeTab === item.key ? "bold" : "500",
-                      }}
+                      className={`${styles.dashboardTabButton} ${
+                        activeTab === item.key ? styles.dashboardTabButtonActive : ""
+                      }`}
                     >
                       {item.label}
                     </button>
@@ -2056,13 +1798,32 @@ export default function CoachDashboard() {
             </div>
 
             <div>
-              <h1 style={{ marginBottom: 4 }}>
-                Welcome, {coachProfile?.name || "Coach"}
-              </h1>
-              <p style={{ marginTop: 0, color: "#6b7280" }}>
-                Team Code: <strong>{teamCode || "Loading..."}</strong>
-              </p>
-            </div>
+  <h1
+    style={{
+      margin: 0,
+      color: "#f8fafc",
+      fontSize: isMobile ? 24 : 30,
+      fontWeight: 700,
+    }}
+  >
+    Welcome, {coachProfile?.name || "Coach"}
+  </h1>
+
+  <p
+    style={{
+      marginTop: 0,
+      marginBottom: 0,
+      color: "#94a3b8",
+      fontSize: 15,
+      lineHeight: 1.2,
+    }}
+  >
+    Team Code:{" "}
+    <strong style={{ color: "#f8fafc" }}>
+      {teamCode || "Loading..."}
+    </strong>
+  </p>
+</div>
           </div>
 
           <div
@@ -2075,7 +1836,7 @@ export default function CoachDashboard() {
           >
             <button
               onClick={handleOpenMailbox}
-              style={mailboxButtonStyle}
+              className={styles.dashboardIconButton}
               title="Mailbox"
             >
               {renderEnvelopeIcon()}
@@ -2100,7 +1861,7 @@ export default function CoachDashboard() {
               )}
             </button>
 
-            <button onClick={handleSignOut} style={buttonStyle}>
+            <button onClick={handleSignOut} className={styles.dashboardButton}>
               Sign Out
             </button>
           </div>
@@ -2109,7 +1870,7 @@ export default function CoachDashboard() {
 
         {activeTab === "overview" && (
           <>
-            <div style={cardStyle}>
+            <div className={styles.dashboardCard} style={{ marginTop: 32 }}>
               <div
                 style={{
                   display: "flex",
@@ -2120,8 +1881,8 @@ export default function CoachDashboard() {
                 }}
               >
                 <div>
-                  <h2 style={{ margin: 0 }}>Today's Planned Sessions</h2>
-                  <p style={{ margin: "4px 0 0", color: "#6b7280" }}>
+                  <h2 className={styles.dashboardHeadingReset}>Today&apos;s Planned Sessions</h2>
+                  <p className={styles.dashboardSubtitle}>
                     What is scheduled for today by group.
                   </p>
                 </div>
@@ -2155,14 +1916,9 @@ export default function CoachDashboard() {
                 >
                   {todaysPlannedSessions.map((session) => (
                     <div
-                      key={session.id}
-                      style={{
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 12,
-                        padding: 12,
-                        background: "#f9fafb",
-                      }}
-                    >
+  key={session.id}
+  className={styles.smallCard}
+>
                       <p style={{ margin: "0 0 6px", fontWeight: "bold" }}>
                         {session.sessionType || "Session"}
                       </p>
@@ -2189,16 +1945,17 @@ export default function CoachDashboard() {
             </div>
 
             <div
-              style={{
-                ...cardStyle,
-                border:
-                  atRiskAthletes.length > 0 ||
-                  unreadMailboxNewestFirst.length > 0 ||
-                  dailySummary.needsCoachNoteCount > 0
-                    ? "2px solid #111827"
-                    : "1px solid #e5e7eb",
-              }}
-            >
+  style={{
+    ...cardStyle,
+    marginTop: 22,
+    border:
+      atRiskAthletes.length > 0 ||
+      unreadMailboxNewestFirst.length > 0 ||
+      dailySummary.needsCoachNoteCount > 0
+        ? "2px solid #111827"
+        : "1px solid rgba(255,255,255,0.12)",
+  }}
+>
               <div
                 style={{
                   display: "flex",
@@ -2209,8 +1966,8 @@ export default function CoachDashboard() {
                 }}
               >
                 <div>
-                  <h2 style={{ margin: 0 }}>Today’s Action List</h2>
-                  <p style={{ margin: "4px 0 0", color: "#6b7280" }}>
+                  <h2 className={styles.dashboardHeadingReset}>Today’s Action List</h2>
+                  <p className={styles.dashboardSubtitle}>
                     What needs your attention right now.
                   </p>
                 </div>
@@ -2235,22 +1992,22 @@ export default function CoachDashboard() {
                 </span>
               </div>
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
-                  gap: 10,
-                }}
-              >
+              <div style={{ display: "grid", gap: 22, marginTop: 16 }}>
                 <div
                   style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 12,
-                    background: atRiskAthletes.length > 0 ? "#fff7f7" : "#f9fafb",
+                    border: "1px solid rgba(148,163,184,0.18)",
+                    borderRadius: 16,
+                    padding: 14,
+                    background:
+                      atRiskAthletes.length > 0
+                        ? "rgba(127,29,29,0.25)"
+                        : "rgba(15,23,42,0.65)",
+                    color: "#f8fafc",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+                    backdropFilter: "blur(12px)",
                   }}
                 >
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  <p className={styles.dashboardSmallMuted}>
                     At-Risk Athletes
                   </p>
                   <p
@@ -2264,18 +2021,8 @@ export default function CoachDashboard() {
                     {atRiskAthletes.length}
                   </p>
                   <button
-                    onClick={() => {
-                      setActiveTab("logs");
-                      setFilterName("");
-                      setFilterEventGroup("All");
-                      setFilterAlertStatus("Alerts Only");
-                      setTimeout(() => scrollToLogsSection(), 50);
-                    }}
-                    style={{
-                      ...secondaryButtonStyle,
-                      width: "100%",
-                      marginRight: 0,
-                    }}
+                    onClick={() => openLogsWithFilters({ alertStatus: "Alerts Only" })}
+                    className={`${styles.dashboardButtonSecondary} ${styles.dashboardButtonFullWidth}`}
                   >
                     Review Alerts
                   </button>
@@ -2283,14 +2030,16 @@ export default function CoachDashboard() {
 
                 <div
                   style={{
-                    border: "1px solid #e5e7eb",
+                    border: "1px solid rgba(148,163,184,0.18)",
                     borderRadius: 12,
                     padding: 12,
                     background:
-                      unreadMailboxNewestFirst.length > 0 ? "#fff7f7" : "#f9fafb",
+                      unreadMailboxNewestFirst.length > 0
+                        ? "rgba(255,255,255,0.04)"
+                        : "rgba(255,255,255,0.02)",
                   }}
                 >
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  <p className={styles.dashboardSmallMuted}>
                     Unread Mailbox
                   </p>
                   <p
@@ -2306,11 +2055,7 @@ export default function CoachDashboard() {
                   </p>
                   <button
                     onClick={handleOpenMailbox}
-                    style={{
-                      ...secondaryButtonStyle,
-                      width: "100%",
-                      marginRight: 0,
-                    }}
+                    className={`${styles.dashboardButtonSecondary} ${styles.dashboardButtonFullWidth}`}
                   >
                     Open Mailbox
                   </button>
@@ -2318,14 +2063,16 @@ export default function CoachDashboard() {
 
                 <div
                   style={{
-                    border: "1px solid #e5e7eb",
+                    border: "1px solid rgba(148,163,184,0.18)",
                     borderRadius: 12,
                     padding: 12,
                     background:
-                      dailySummary.needsCoachNoteCount > 0 ? "#fff7ed" : "#f9fafb",
+                      dailySummary.needsCoachNoteCount > 0
+                        ? "rgba(245, 224, 209, 0.18)"
+                        : "rgba(255,255,255,0.02)",
                   }}
                 >
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  <p className={styles.dashboardSmallMuted}>
                     Coach Notes Needed
                   </p>
                   <p
@@ -2334,35 +2081,24 @@ export default function CoachDashboard() {
                       fontSize: 24,
                       fontWeight: "bold",
                       color:
-                        dailySummary.needsCoachNoteCount > 0 ? "#ea580c" : "#111827",
+                        dailySummary.needsCoachNoteCount > 0 ? "#ea580c" : "#f8fafc",
                     }}
                   >
                     {dailySummary.needsCoachNoteCount}
                   </p>
                   <button
-                    onClick={() => {
-                      setActiveTab("logs");
-                      setFilterName("");
-                      setFilterEventGroup("All");
-                      setFilterAlertStatus("All");
-                      setTimeout(() => scrollToLogsSection(), 50);
-                    }}
-                    style={{
-                      ...secondaryButtonStyle,
-                      width: "100%",
-                      marginRight: 0,
-                    }}
+                    onClick={() => openLogsWithFilters()}
+                    className={`${styles.dashboardButtonSecondary} ${styles.dashboardButtonFullWidth}`}
                   >
                     Add Notes
                   </button>
                 </div>
-              </div>
-            </div>
+                </div>
 
-
-            <div style={cardStyle}>
               <div
                 style={{
+                  ...cardStyle,
+                  marginTop: 24,
                   display: "flex",
                   justifyContent: "space-between",
                   gap: 12,
@@ -2394,46 +2130,42 @@ export default function CoachDashboard() {
                   marginTop: 12,
                 }}
               >
-                <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Logged Today</p>
+                <div className={styles.dashboardSummaryCard}>
+                  <p className={styles.dashboardSmallMuted}>Logged Today</p>
                   <p style={{ margin: "6px 0 0", fontSize: 22, fontWeight: "bold" }}>
                     {dailySummary.loggedTodayCount}
                   </p>
                 </div>
 
                 <div
+                  className={styles.dashboardSummaryCard}
                   style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 12,
-                    background: dailySummary.noOrUnsureCount > 0 ? "#fff7f7" : undefined,
+                    background: dailySummary.noOrUnsureCount > 0 ? "rgba(255,255,255,0.05)" : undefined,
                   }}
                 >
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>No / Unsure</p>
+                  <p className={styles.dashboardSmallMuted}>No / Unsure</p>
                   <p style={{ margin: "6px 0 0", fontSize: 22, fontWeight: "bold" }}>
                     {dailySummary.noOrUnsureCount}
                   </p>
                 </div>
 
-                <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Highest Risk</p>
+                <div className={styles.dashboardSummaryCard}>
+                  <p className={styles.dashboardSmallMuted}>Highest Risk</p>
                   <p style={{ margin: "6px 0 0", fontWeight: "bold" }}>
                     {dailySummary.highestRiskLog?.name || "N/A"}
                   </p>
-                  <p style={{ margin: "4px 0 0", fontSize: 12, color: "#6b7280" }}>
+                  <p style={{ margin: "4px 0 0", fontSize: 12, color: "#9ca8b8" }}>
                     Ratio: {dailySummary.highestRiskLog?.readinessRatio || "N/A"}
                   </p>
                 </div>
 
                 <div
+                  className={styles.dashboardSummaryCard}
                   style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 12,
-                    background: dailySummary.needsCoachNoteCount > 0 ? "#fff7ed" : undefined,
+                    background: dailySummary.needsCoachNoteCount > 0 ? "rgba(251,146,60,0.12)" : undefined,
                   }}
                 >
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  <p className={styles.dashboardSmallMuted}>
                     Coach Notes Needed
                   </p>
                   <p style={{ margin: "6px 0 0", fontSize: 22, fontWeight: "bold" }}>
@@ -2446,15 +2178,16 @@ export default function CoachDashboard() {
                   onClick={() => setShowMissedWorkoutList((current) => !current)}
                   style={{
                     textAlign: "left",
-                    border: "1px solid #e5e7eb",
+                    border: "1px solid rgba(255,255,255,0.18)",
                     borderRadius: 12,
                     padding: 12,
-                    background: dailySummary.missedWorkoutsThisWeek > 0 ? "#fff7f7" : "white",
+                    background: dailySummary.missedWorkoutsThisWeek > 0 ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.04)",
                     cursor: "pointer",
                     fontFamily: "inherit",
+                    color: "#f8fafc",
                   }}
                 >
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  <p className={styles.dashboardSmallMuted}>
                     Missed This Week
                   </p>
                   <p
@@ -2473,14 +2206,12 @@ export default function CoachDashboard() {
                 </button>
 
                 <div
+                  className={styles.dashboardSummaryCard}
                   style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 12,
-                    background: dailySummary.modifiedWorkoutsThisWeek > 0 ? "#fff7ed" : undefined,
+                    background: dailySummary.modifiedWorkoutsThisWeek > 0 ? "rgba(249,115,22,0.12)" : undefined,
                   }}
                 >
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  <p className={styles.dashboardSmallMuted}>
                     Modified This Week
                   </p>
                   <p
@@ -2488,7 +2219,7 @@ export default function CoachDashboard() {
                       margin: "6px 0 0",
                       fontSize: 22,
                       fontWeight: "bold",
-                      color: dailySummary.modifiedWorkoutsThisWeek > 0 ? "#d97706" : "#111827",
+                      color: dailySummary.modifiedWorkoutsThisWeek > 0 ? "#f59e0b" : "#f8fafc",
                     }}
                   >
                     {dailySummary.modifiedWorkoutsThisWeek}
@@ -2496,14 +2227,12 @@ export default function CoachDashboard() {
                 </div>
 
                 <div
+                  className={styles.dashboardSummaryCard}
                   style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 12,
-                    background: dailySummary.completedWorkoutsThisWeek > 0 ? "#f0fdf4" : undefined,
+                    background: dailySummary.completedWorkoutsThisWeek > 0 ? "rgba(52,211,153,0.18)" : undefined,
                   }}
                 >
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  <p className={styles.dashboardSmallMuted}>
                     Completed This Week
                   </p>
                   <p
@@ -2511,7 +2240,7 @@ export default function CoachDashboard() {
                       margin: "6px 0 0",
                       fontSize: 22,
                       fontWeight: "bold",
-                      color: dailySummary.completedWorkoutsThisWeek > 0 ? "#16a34a" : "#111827",
+                      color: dailySummary.completedWorkoutsThisWeek > 0 ? "#22c55e" : "#f8fafc",
                     }}
                   >
                     {dailySummary.completedWorkoutsThisWeek}
@@ -2523,7 +2252,7 @@ export default function CoachDashboard() {
             {showMissedWorkoutList && (
               <div
                 style={{
-                  borderTop: "1px solid #e5e7eb",
+                  borderTop: "1px solid rgba(255,255,255,0.12)",
                   marginTop: 14,
                   paddingTop: 14,
                 }}
@@ -2539,17 +2268,17 @@ export default function CoachDashboard() {
                     <div
                       key={`${athlete.name}-${athlete.eventGroup}`}
                       style={{
-                        border: "1px solid #fecaca",
+                        border: "1px solid rgba(220, 38, 38, 0.3)",
                         borderRadius: 12,
                         padding: 12,
                         marginBottom: 8,
-                        background: "#fff7f7",
+                        background: "rgba(220, 38, 38, 0.12)",
                       }}
                     >
                       <p style={{ margin: "0 0 4px", fontWeight: "bold" }}>
                         {athlete.name}
                       </p>
-                      <p style={{ margin: "0 0 4px", color: "#6b7280", fontSize: 13 }}>
+                      <p style={{ margin: "0 0 4px", color: "#9ca8b8", fontSize: 13 }}>
                         {athlete.eventGroup}
                       </p>
                       <p style={{ margin: 0, color: "#dc2626", fontWeight: "bold" }}>
@@ -2561,7 +2290,7 @@ export default function CoachDashboard() {
               </div>
             )}
 
-            <div style={cardStyle}>
+            <div className={styles.dashboardCard}>
               <div
                 style={{
                   display: "flex",
@@ -2572,8 +2301,8 @@ export default function CoachDashboard() {
                 }}
               >
                 <div>
-                  <h2 style={{ margin: 0 }}>Trend Tracking & Notifications</h2>
-                  <p style={{ margin: "4px 0 0", color: "#6b7280" }}>
+                  <h2 className={styles.dashboardHeadingReset}>Trend Tracking & Notifications</h2>
+                  <p className={styles.dashboardSubtitle}>
                     Automatic coach alerts based on recent athlete logs.
                   </p>
                 </div>
@@ -2608,22 +2337,12 @@ export default function CoachDashboard() {
                   {coachTrendNotifications.slice(0, 8).map((item, index) => (
                     <div
                       key={`${item.athleteName}-${item.type}-${index}`}
-                      onClick={() => {
-                        setActiveTab("logs");
-                        setFilterName(item.athleteName);
-                        setFilterEventGroup("All");
-                        setFilterAlertStatus("All");
-                        setTimeout(() => scrollToLogsSection(), 50);
-                      }}
+                      onClick={() => openLogsWithFilters({ name: item.athleteName })}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
-                          setActiveTab("logs");
-                          setFilterName(item.athleteName);
-                          setFilterEventGroup("All");
-                          setFilterAlertStatus("All");
-                          setTimeout(() => scrollToLogsSection(), 50);
+                          openLogsWithFilters({ name: item.athleteName });
                         }
                       }}
                       style={{
@@ -2632,10 +2351,10 @@ export default function CoachDashboard() {
                         padding: 12,
                         background:
                           item.severity === "High"
-                            ? "#fff7f7"
+                            ? "rgba(220,38,38,0.12)"
                             : item.severity === "Medium"
-                            ? "#fff7ed"
-                            : "#eff6ff",
+                            ? "rgba(249,115,22,0.12)"
+                            : "rgba(14,165,233,0.12)",
                         cursor: "pointer",
                       }}
                     >
@@ -2666,11 +2385,11 @@ export default function CoachDashboard() {
                         </span>
                       </div>
 
-                      <p style={{ margin: "0 0 4px", color: "#6b7280", fontSize: 13 }}>
+                      <p style={{ margin: "0 0 4px", color: "#9ca8b8", fontSize: 13 }}>
                         {item.type} • {item.eventGroup}
                       </p>
 
-                      <p style={{ margin: 0, color: "#374151", fontSize: 13 }}>
+                      <p style={{ margin: 0, color: "#d1d5db", fontSize: 13 }}>
                         {item.message}
                       </p>
                     </div>
@@ -2683,20 +2402,20 @@ export default function CoachDashboard() {
 
         {activeTab === "planning" && (
           <section>
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>
+            <div className={styles.dashboardCard}>
+              <h2 className={styles.dashboardHeadingReset}>
                 {editingSessionId ? "Edit Planned Session" : "Plan Session"}
               </h2>
 
               <input
-                style={inputStyle}
+                className={styles.dashboardInput}
                 placeholder="Session type"
                 value={sessionType}
                 onChange={(e) => setSessionType(e.target.value)}
               />
 
               <select
-                style={inputStyle}
+                className={styles.dashboardInput}
                 value={sessionGroup}
                 onChange={(e) => setSessionGroup(e.target.value)}
               >
@@ -2709,14 +2428,14 @@ export default function CoachDashboard() {
               </select>
 
               <input
-                style={inputStyle}
+                className={styles.dashboardInput}
                 type="date"
                 value={sessionDate}
                 onChange={(e) => setSessionDate(e.target.value)}
               />
 
               <input
-                style={inputStyle}
+                className={styles.dashboardInput}
                 type="number"
                 min="1"
                 max="10"
@@ -2726,25 +2445,25 @@ export default function CoachDashboard() {
               />
 
               <textarea
-                style={noteInputStyle}
+                className={styles.dashboardTextarea}
                 placeholder="Workout notes"
                 value={workoutNotes}
                 onChange={(e) => setWorkoutNotes(e.target.value)}
               />
 
-              <button onClick={handleSavePlannedSession} style={buttonStyle}>
+              <button onClick={handleSavePlannedSession} className={styles.dashboardButton}>
                 {editingSessionId ? "Update Session" : "Save Session"}
               </button>
 
               {editingSessionId && (
-                <button onClick={handleCancelEdit} style={secondaryButtonStyle}>
+                <button onClick={handleCancelEdit} className={styles.dashboardButtonSecondary}>
                   Cancel Edit
                 </button>
               )}
             </div>
 
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>Planned Sessions</h2>
+            <div className={styles.dashboardCard}>
+              <h2 className={styles.dashboardHeadingReset}>Planned Sessions</h2>
 
               {plannedSessions.length === 0 ? (
                 <p>No planned sessions yet.</p>
@@ -2752,15 +2471,10 @@ export default function CoachDashboard() {
                 plannedSessions.map((session) => (
                   <div
                     key={session.id}
-                    style={{
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 12,
-                      padding: 12,
-                      marginBottom: 10,
-                      background: "#f9fafb",
-                    }}
+                    className={styles.smallCard}
+                    style={{ marginBottom: 10 }}
                   >
-                    <p style={{ marginTop: 0 }}>
+                    <p className={styles.dashboardHeadingReset}>
                       <strong>{session.sessionType || "Session"}</strong>
                     </p>
                     <p>Group: {session.sessionGroup || "All"}</p>
@@ -2770,10 +2484,10 @@ export default function CoachDashboard() {
                       Notes: {session.workoutNotes || "None"}
                     </p>
 
-                    <button onClick={() => handleEditSession(session)} style={editButtonStyle}>
+                    <button onClick={() => handleEditSession(session)} className={styles.dashboardButtonAccent}>
                       Edit
                     </button>
-                    <button onClick={() => handleDeleteSession(session.id)} style={deleteButtonStyle}>
+                    <button onClick={() => handleDeleteSession(session.id)} className={styles.dashboardButtonDanger}>
                       Delete
                     </button>
                   </div>
@@ -2785,9 +2499,9 @@ export default function CoachDashboard() {
 
         {activeTab === "averages" && (
           <section>
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>Team Averages</h2>
-              <p style={{ color: "#6b7280" }}>
+            <div className={styles.dashboardCard}>
+              <h2 className={styles.dashboardHeadingReset}>Team Averages</h2>
+              <p className={styles.dashboardSubtitle}>
                 Compare short-term, weekly, and baseline readiness trends.
               </p>
 
@@ -2797,15 +2511,10 @@ export default function CoachDashboard() {
                 athleteAverages.map((athlete) => (
                   <div
                     key={`${athlete.name}-${athlete.eventGroup}`}
-                    style={{
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 12,
-                      padding: 12,
-                      marginBottom: 10,
-                      background: "#f9fafb",
-                    }}
+                    className={styles.smallCard}
+                    style={{ marginBottom: 10 }}
                   >
-                    <p style={{ marginTop: 0 }}>
+                    <p className={styles.dashboardHeadingReset}>
                       <strong>{athlete.name}</strong>
                     </p>
                     <p>Event Group: {athlete.eventGroup}</p>
@@ -2826,9 +2535,9 @@ export default function CoachDashboard() {
           <section id="coach-athlete-logs-section">
             {renderFilters()}
 
-            <div style={cardStyle}>
-              <h2 style={{ marginTop: 0 }}>Athlete Readiness Logs</h2>
-              <p style={{ color: "#6b7280" }}>
+            <div className={styles.dashboardCard}>
+              <h2 className={styles.dashboardHeadingReset}>Athlete Readiness Logs</h2>
+              <p className={styles.dashboardSubtitle}>
                 Showing {filteredAthleteLogs.length} of {athleteLogs.length} logs
               </p>
 
@@ -2839,8 +2548,8 @@ export default function CoachDashboard() {
               )}
             </div>
           </section>
-        )}
+                )}
       </div>
-    </main>
+    </div>
   );
 }
