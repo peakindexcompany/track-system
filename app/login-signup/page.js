@@ -232,13 +232,13 @@ return (
   >
     <div className={styles.logoContainer}>
       <Image
-  src="/peak-index-logo-finalv2.png"
-  alt="Peak Index"
-  width={400}
-height={400}
-  className={styles.logo}
-  priority
-/>
+        src="/peak-index-logo-final.png"
+        alt="Peak Index"
+        width={400}
+        height={400}
+        className={styles.logo}
+        priority
+      />
     </div>
         {/* Header */}
 
