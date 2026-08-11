@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import styles from "../dashboard.module.css";
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../lib/firebase";
 import { calculateAdjustedLoad } from "../../lib/readiness";
@@ -107,6 +108,18 @@ export default function AthleteDashboard() {
     return `${year}-${month}-${day}`;
   };
 
+  const normalizeEventGroupLabel = (value) => {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "Unassigned";
+
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "400/400h/800") {
+      return "400/400h";
+    }
+
+    return trimmed;
+  };
+
   const formatSessionDate = (session) => {
     return session?.sessionDate || "No Date";
   };
@@ -161,10 +174,11 @@ export default function AthleteDashboard() {
 
         const profileTeamCode = data.teamCode || data.teamcode || "";
         const profileEventGroup = data.eventGroup || "";
+        const normalizedProfileEventGroup = normalizeEventGroupLabel(profileEventGroup);
 
         setAthleteProfile(data);
         setTeamCode(profileTeamCode);
-        setEventGroup(profileEventGroup);
+        setEventGroup(normalizedProfileEventGroup);
 
         if (profileTeamCode) {
           const sessionsQuery = query(
@@ -179,9 +193,9 @@ export default function AthleteDashboard() {
             }));
 
             const groupSessions = sessionsData.filter((session) => {
-              const sessionGroup = session.sessionGroup || "All";
+              const sessionGroup = normalizeEventGroupLabel(session.sessionGroup || "All");
 
-              return sessionGroup === "All" || sessionGroup === profileEventGroup;
+              return sessionGroup === "All" || sessionGroup === normalizedProfileEventGroup;
             });
 
             const sortedSessions = sortSessionsNewestFirst(groupSessions);
@@ -487,12 +501,14 @@ export default function AthleteDashboard() {
     .slice(0, 2);
 
   const cardStyle = {
-    border: "1px solid #e5e7eb",
-    borderRadius: 18,
+    border: "1px solid rgba(148, 163, 184, 0.18)",
+    borderRadius: 22,
     padding: isMobile ? 18 : 24,
     marginBottom: 18,
-    background: "white",
-    boxShadow: "0 2px 10px rgba(15, 23, 42, 0.08)",
+    background: "rgba(15, 23, 42, 0.78)",
+    color: "#f8fafc",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
+    backdropFilter: "blur(18px)",
   };
 
   const inputStyle = {
@@ -501,17 +517,19 @@ export default function AthleteDashboard() {
     maxWidth: isMobile ? "100%" : 440,
     padding: isMobile ? 12 : 11,
     marginBottom: 6,
-    border: "1px solid #d1d5db",
+    border: "1px solid rgba(148, 163, 184, 0.22)",
     borderRadius: 10,
     fontSize: 14,
     boxSizing: "border-box",
+    background: "rgba(15, 23, 42, 0.6)",
+    color: "#f8fafc",
   };
 
   const buttonStyle = {
     padding: "11px 16px",
-    border: "1px solid #2563eb",
+    border: "1px solid rgba(47, 124, 255, 0.75)",
     borderRadius: 10,
-    background: "#2563eb",
+    background: "linear-gradient(135deg, #2F7CFF, #1554D8)",
     color: "white",
     cursor: "pointer",
     marginTop: 8,
@@ -519,14 +537,15 @@ export default function AthleteDashboard() {
     width: isMobile ? "100%" : undefined,
     minHeight: 44,
     fontWeight: "bold",
+    boxShadow: "0 10px 30px rgba(47,124,255,.35)",
   };
 
   const secondaryButtonStyle = {
     padding: "10px 14px",
-    border: "1px solid #d1d5db",
+    border: "1px solid rgba(148, 163, 184, 0.28)",
     borderRadius: 10,
-    background: "white",
-    color: "#111827",
+    background: "rgba(255, 255, 255, 0.05)",
+    color: "#f8fafc",
     cursor: "pointer",
     marginTop: 8,
     marginRight: isMobile ? 0 : 8,
@@ -578,9 +597,11 @@ export default function AthleteDashboard() {
     width: "100%",
     maxWidth: isMobile ? "100%" : 420,
     height: "100vh",
-    background: "white",
+    background: "rgba(7, 17, 31, 0.96)",
+    color: "#f8fafc",
+    borderLeft: "1px solid rgba(148, 163, 184, 0.18)",
     zIndex: 60,
-    boxShadow: "-8px 0 20px rgba(0,0,0,0.16)",
+    boxShadow: "-8px 0 20px rgba(0,0,0,0.28)",
     padding: isMobile ? 16 : 20,
     overflowY: "auto",
     transition: "right 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
@@ -595,7 +616,7 @@ export default function AthleteDashboard() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.25)",
+            background: "rgba(2, 6, 23, 0.7)",
             zIndex: 50,
           }}
         />
@@ -611,8 +632,8 @@ export default function AthleteDashboard() {
           }}
         >
           <div>
-            <h2 style={{ margin: 0 }}>Mailbox</h2>
-            <p style={{ margin: "4px 0 0", color: "#6b7280" }}>
+            <h2 style={{ margin: 0, color: "#f8fafc" }}>Mailbox</h2>
+            <p style={{ margin: "4px 0 0", color: "#94a3b8" }}>
               {unreadMailboxNewestFirst.length === 0
                 ? "All caught up"
                 : `${unreadMailboxNewestFirst.length} new notification${
@@ -624,8 +645,9 @@ export default function AthleteDashboard() {
           <button
             onClick={handleCloseMailbox}
             style={{
-              border: "1px solid #d1d5db",
-              background: "white",
+              border: "1px solid rgba(148, 163, 184, 0.2)",
+              background: "rgba(255,255,255,0.04)",
+              color: "#f8fafc",
               borderRadius: 999,
               width: 36,
               height: 36,
@@ -643,14 +665,14 @@ export default function AthleteDashboard() {
         {unreadMailboxNewestFirst.length === 0 ? (
           <div
             style={{
-              border: "1px solid #e5e7eb",
+              border: "1px solid rgba(148,163,184,0.18)",
               borderRadius: 14,
               padding: 14,
-              background: "#f9fafb",
+              background: "rgba(255,255,255,0.04)",
             }}
           >
-            <p style={{ margin: 0, fontWeight: "bold" }}>All caught up.</p>
-            <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
+            <p style={{ margin: 0, fontWeight: "bold", color: "#f8fafc" }}>All caught up.</p>
+            <p style={{ margin: "6px 0 0", color: "#94a3b8" }}>
               No unread notifications.
             </p>
           </div>
@@ -659,11 +681,11 @@ export default function AthleteDashboard() {
             <div
               key={item.id}
               style={{
-                border: "1px solid #fecaca",
+                border: "1px solid rgba(148, 163, 184, 0.18)",
                 borderRadius: 16,
                 padding: 16,
                 marginBottom: 12,
-                background: "#fff7f7",
+                background: "rgba(15, 23, 42, 0.75)",
                 boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
               }}
             >
@@ -695,32 +717,32 @@ export default function AthleteDashboard() {
                 </span>
               </div>
 
-              <p style={{ color: "#374151", marginTop: 0 }}>{item.message}</p>
+              <p style={{ color: "#cbd5e1", marginTop: 0 }}>{item.message}</p>
 
               {item.type === "planned_session" && (
                 <>
                   <div
                     style={{
-                      background: "white",
-                      border: "1px solid #fee2e2",
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(148,163,184,0.18)",
                       borderRadius: 12,
                       padding: 12,
                       marginTop: 10,
                     }}
                   >
-                    <p style={{ margin: "0 0 6px" }}>
+                    <p style={{ margin: "0 0 6px", color: "#f8fafc" }}>
                       <strong>Session:</strong> {item.sessionType}
                     </p>
-                    <p style={{ margin: "0 0 6px" }}>
+                    <p style={{ margin: "0 0 6px", color: "#e2e8f0" }}>
                       <strong>Date:</strong> {item.sessionDate}
                     </p>
-                    <p style={{ margin: "0 0 6px" }}>
+                    <p style={{ margin: "0 0 6px", color: "#e2e8f0" }}>
                       <strong>Group:</strong> {item.sessionGroup}
                     </p>
-                    <p style={{ margin: "0 0 6px" }}>
+                    <p style={{ margin: "0 0 6px", color: "#e2e8f0" }}>
                       <strong>Planned RPE:</strong> {item.plannedRPE}
                     </p>
-                    <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+                    <p style={{ margin: 0, whiteSpace: "pre-wrap", color: "#e2e8f0" }}>
                       <strong>Notes:</strong> {item.notes}
                     </p>
                   </div>
@@ -748,20 +770,20 @@ export default function AthleteDashboard() {
                 <>
                   <div
                     style={{
-                      background: "white",
-                      border: "1px solid #fee2e2",
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(148,163,184,0.18)",
                       borderRadius: 12,
                       padding: 12,
                       marginTop: 10,
                     }}
                   >
-                    <p style={{ margin: "0 0 6px" }}>
+                    <p style={{ margin: "0 0 6px", color: "#f8fafc" }}>
                       <strong>Session:</strong> {item.sessionType}
                     </p>
-                    <p style={{ margin: "0 0 6px" }}>
+                    <p style={{ margin: "0 0 6px", color: "#e2e8f0" }}>
                       <strong>Session Date:</strong> {item.sessionDate}
                     </p>
-                    <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+                    <p style={{ margin: 0, whiteSpace: "pre-wrap", color: "#e2e8f0" }}>
                       <strong>Coach Note:</strong> {item.coachNote}
                     </p>
                   </div>
@@ -797,6 +819,184 @@ export default function AthleteDashboard() {
     </>
   );
 
+  const getAthleteScatterData = () => {
+    return sortLogsNewestFirst(readinessLogs)
+      .slice(0, 12)
+      .map((log) => {
+        const stress = Number(log.stress || 0);
+        const sleep = Number(log.sleepQuality || log.sleepHours || 0);
+        const readiness = Number(log.readinessRatio || 0);
+
+        if (!Number.isFinite(stress) || !Number.isFinite(sleep) || !Number.isFinite(readiness)) {
+          return null;
+        }
+
+        return {
+          label: log.sessionDate || "Session",
+          x: Number(stress.toFixed(1)),
+          y: Number(sleep.toFixed(1)),
+          readiness: Number(readiness.toFixed(2)),
+          color: getReadinessColor(readiness),
+        };
+      })
+      .filter(Boolean);
+  };
+
+  const renderScatterPlot = ({ data, title, xLabel, yLabel, fallbackMessage }) => {
+    if (!data || data.length === 0) {
+      return <div style={{ padding: 12, color: "#94a3b8" }}>{fallbackMessage}</div>;
+    }
+
+    const isCompact = isMobile;
+    const width = isCompact ? 560 : 680;
+    const height = isCompact ? 240 : 280;
+    const padding = isCompact ? { top: 20, right: 16, bottom: 44, left: 62 } : { top: 26, right: 20, bottom: 54, left: 74 };
+    const xValues = data.map((point) => point.x);
+    const yValues = data.map((point) => point.y);
+    const xMin = Math.min(0, ...xValues);
+    const xMax = Math.max(10, ...xValues);
+    const yMin = Math.min(0, ...yValues);
+    const yMax = Math.max(10, ...yValues);
+    const xRange = xMax - xMin || 1;
+    const yRange = yMax - yMin || 1;
+
+    const scaleX = (value) =>
+      padding.left + ((value - xMin) / xRange) * (width - padding.left - padding.right);
+    const scaleY = (value) =>
+      height - padding.bottom - ((value - yMin) / yRange) * (height - padding.top - padding.bottom);
+
+    return (
+      <div style={{ marginTop: 12 }}>
+        <p style={{ margin: "0 0 12px", fontWeight: 700, color: "#f8fafc" }}>{title}</p>
+        <div style={{ background: "rgba(15, 23, 42, 0.35)", borderRadius: 14, padding: 8 }}>
+          <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", maxHeight: 300 }}>
+            {[0, 2.5, 5, 7.5, 10].map((tick) => {
+              const x = scaleX(tick);
+              const y = scaleY(tick);
+              return (
+                <g key={`axis-${tick}`}>
+                  <line x1={x} y1={padding.top} x2={x} y2={height - padding.bottom} stroke="rgba(148,163,184,0.18)" strokeDasharray="4 4" />
+                  <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} stroke="rgba(148,163,184,0.18)" strokeDasharray="4 4" />
+                  <text x={x} y={height - 22} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 9 : 10}>{tick.toFixed(1)}</text>
+                  <text x={padding.left - 12} y={y + 4} textAnchor="end" fill="#9ca8b8" fontSize={isCompact ? 9 : 10}>{tick.toFixed(1)}</text>
+                </g>
+              );
+            })}
+
+            <line x1={padding.left} y1={height - padding.bottom} x2={width - padding.right} y2={height - padding.bottom} stroke="#94a3b8" />
+            <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#94a3b8" />
+
+            {data.map((point, index) => (
+              <g key={`${point.label}-${index}`}>
+                <circle
+                  cx={scaleX(point.x)}
+                  cy={scaleY(point.y)}
+                  r={7 + point.readiness / 2}
+                  fill={point.color}
+                  opacity={0.9}
+                  stroke="rgba(255,255,255,0.8)"
+                  strokeWidth={1}
+                />
+                <text x={scaleX(point.x) + 10} y={scaleY(point.y) - 8} fill="#e2e8f0" fontSize={isCompact ? 9 : 10} fontWeight="700">
+                  {point.label}
+                </text>
+              </g>
+            ))}
+
+            <text x={width / 2} y={height - 8} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>
+              {xLabel}
+            </text>
+            <text x={28} y={height / 2} transform={`rotate(-90 28 ${height / 2})`} fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>
+              {yLabel}
+            </text>
+          </svg>
+        </div>
+      </div>
+    );
+  };
+
+  const renderLineChart = ({ data, title, fallbackMessage }) => {
+    if (!data || data.length === 0) {
+      return <div style={{ padding: 12, color: "#94a3b8" }}>{fallbackMessage}</div>;
+    }
+
+    const isCompact = isMobile;
+    const width = isCompact ? 560 : 680;
+    const height = isCompact ? 230 : 270;
+    const padding = isCompact ? { top: 24, right: 24, bottom: 44, left: 62 } : { top: 32, right: 30, bottom: 52, left: 74 };
+    const allValues = data.flatMap((series) => series.points.map((point) => point.value));
+    const minY = Math.min(0, ...allValues);
+    const maxY = Math.max(2.2, ...allValues);
+    const range = maxY - minY || 1;
+
+    const scaleX = (index, total) =>
+      padding.left + (index / Math.max(total - 1, 1)) * (width - padding.left - padding.right);
+    const scaleY = (value) =>
+      height - padding.bottom - ((value - minY) / range) * (height - padding.top - padding.bottom);
+
+    return (
+      <div style={{ marginTop: 12 }}>
+        <p style={{ margin: "0 0 12px", fontWeight: 700, color: "#f8fafc" }}>{title}</p>
+        <div style={{ background: "rgba(15, 23, 42, 0.35)", borderRadius: 14, padding: 8 }}>
+          <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", maxHeight: 300 }}>
+            {[0, 0.5, 1, 1.5, 2].map((tick) => {
+              const y = scaleY(tick);
+              return (
+                <g key={`line-axis-${tick}`}>
+                  <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} stroke="rgba(148,163,184,0.18)" strokeDasharray="4 4" />
+                  <text x={padding.left - 12} y={y + 4} textAnchor="end" fill="#9ca8b8" fontSize="10">{tick.toFixed(1)}</text>
+                </g>
+              );
+            })}
+
+            <line x1={padding.left} y1={height - padding.bottom} x2={width - padding.right} y2={height - padding.bottom} stroke="#94a3b8" />
+            <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#94a3b8" />
+
+            {data.map((series) => (
+              <g key={series.label}>
+                <path
+                  d={series.points
+                    .map((point, index) => `${index === 0 ? "M" : "L"}${scaleX(index, series.points.length)},${scaleY(point.value)}`)
+                    .join(" ")}
+                  fill="none"
+                  stroke={series.color}
+                  strokeWidth="2.8"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+                {series.points.map((point, index) => (
+                  <g key={`${series.label}-${point.label}-${index}`}>
+                    <circle cx={scaleX(index, series.points.length)} cy={scaleY(point.value)} r={4.5} fill={series.color} stroke="#fff" strokeWidth="1" />
+                    <text x={scaleX(index, series.points.length) + 6} y={scaleY(point.value) - 8} fill="#e2e8f0" fontSize={isCompact ? 8 : 9}>{point.label}</text>
+                  </g>
+                ))}
+              </g>
+            ))}
+
+            <text x={width / 2} y={height - 10} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>Recent sessions</text>
+            <text x={28} y={height / 2} transform={`rotate(-90 28 ${height / 2})`} fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>Readiness</text>
+          </svg>
+        </div>
+      </div>
+    );
+  };
+
+  const athleteScatterData = getAthleteScatterData();
+  const athleteReadinessTrend = [
+    {
+      label: "Readiness",
+      color: "#2F7CFF",
+      points: sortLogsNewestFirst(readinessLogs)
+        .slice(0, 8)
+        .reverse()
+        .map((log) => ({
+          label: (log.sessionDate || "").slice(5) || "n/a",
+          value: Number(log.readinessRatio || 0),
+        }))
+        .filter((point) => Number.isFinite(point.value)),
+    },
+  ];
+
   const renderOverview = () => (
     <>
       <section style={cardStyle}>
@@ -806,21 +1006,21 @@ export default function AthleteDashboard() {
             justifyContent: "space-between",
             gap: 12,
             alignItems: "flex-start",
-            borderBottom: "1px solid #e5e7eb",
+            borderBottom: "1px solid rgba(148, 163, 184, 0.18)",
             paddingBottom: 16,
             marginBottom: 18,
           }}
         >
           <div>
-            <h2 style={{ margin: "0 0 6px", fontSize: isMobile ? 26 : 32 }}>
+            <h2 style={{ margin: "0 0 6px", fontSize: isMobile ? 26 : 32, color: "#f8fafc" }}>
               Welcome, {athleteDisplayName}!
             </h2>
-            <p style={{ margin: 0, color: "#6b7280", fontSize: 16 }}>
+            <p style={{ margin: 0, color: "#94a3b8", fontSize: 16 }}>
               Here’s your plan for today.
             </p>
           </div>
 
-          <div style={{ textAlign: "right", color: "#374151", minWidth: 110 }}>
+          <div style={{ textAlign: "right", color: "#cbd5e1", minWidth: 110 }}>
             <p style={{ margin: 0, fontWeight: "bold" }}>
               {new Date().toLocaleDateString([], {
                 month: "short",
@@ -842,13 +1042,13 @@ export default function AthleteDashboard() {
           {plannedSessions.length === 0 ? (
             <div
               style={{
-                border: "1px solid #e5e7eb",
+                border: "1px solid rgba(148, 163, 184, 0.18)",
                 borderRadius: 12,
                 padding: 14,
-                background: "#f9fafb",
+                background: "rgba(255,255,255,0.04)",
               }}
             >
-              <p style={{ margin: 0 }}>No planned sessions assigned to your group yet.</p>
+              <p style={{ margin: 0, color: "#e2e8f0" }}>No planned sessions assigned to your group yet.</p>
             </div>
           ) : (
             <>
@@ -883,7 +1083,7 @@ export default function AthleteDashboard() {
                   <p style={{ margin: 0, fontWeight: "bold", color: "#166534" }}>
                     Today’s workout assigned.
                   </p>
-                  <p style={{ margin: "4px 0 0", color: "#374151" }}>
+                  <p style={{ margin: "4px 0 0", color: "#cbd5e1" }}>
                     You’re set to get after it.
                   </p>
                 </div>
@@ -892,10 +1092,10 @@ export default function AthleteDashboard() {
               {selectedSession && (
                 <div
                   style={{
-                    border: "1px solid #e5e7eb",
+                    border: "1px solid rgba(148, 163, 184, 0.18)",
                     borderRadius: 14,
                     padding: 16,
-                    background: "white",
+                    background: "rgba(255,255,255,0.04)",
                     display: "grid",
                     gridTemplateColumns: isMobile ? "1fr" : "1fr auto",
                     gap: 14,
@@ -903,13 +1103,13 @@ export default function AthleteDashboard() {
                   }}
                 >
                   <div>
-                    <p style={{ margin: "0 0 6px", fontSize: 22, fontWeight: "bold" }}>
+                    <p style={{ margin: "0 0 6px", fontSize: 22, fontWeight: "bold", color: "#f8fafc" }}>
                       {selectedSession.sessionType || "Session"}
                     </p>
-                    <p style={{ margin: "0 0 4px", color: "#6b7280" }}>
+                    <p style={{ margin: "0 0 4px", color: "#94a3b8" }}>
                       Group: {selectedSession.sessionGroup || "All"}
                     </p>
-                    <p style={{ margin: 0, color: "#6b7280" }}>
+                    <p style={{ margin: 0, color: "#94a3b8" }}>
                       Date: {selectedSession.sessionDate || "N/A"} • Planned RPE: {selectedSession.plannedRPE || "N/A"}
                     </p>
                   </div>
@@ -934,7 +1134,7 @@ export default function AthleteDashboard() {
 
         <div
           style={{
-            borderTop: "1px solid #e5e7eb",
+            borderTop: "1px solid rgba(148, 163, 184, 0.18)",
             paddingTop: 18,
             marginTop: 18,
           }}
@@ -966,38 +1166,38 @@ export default function AthleteDashboard() {
                 gap: 10,
               }}
             >
-              <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                <p style={{ margin: 0, color: "#6b7280", fontSize: 13 }}>Sleep</p>
-                <p style={{ margin: "6px 0 0", fontWeight: "bold" }}>
+              <div style={{ border: "1px solid rgba(148, 163, 184, 0.18)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.04)" }}>
+                <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>Sleep</p>
+                <p style={{ margin: "6px 0 0", fontWeight: "bold", color: "#f8fafc" }}>
                   {todayLog.sleepHours || "N/A"} hrs • Quality {todayLog.sleepQuality || "N/A"}/10
                 </p>
               </div>
 
-              <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                <p style={{ margin: 0, color: "#6b7280", fontSize: 13 }}>Body / Mind</p>
-                <p style={{ margin: "6px 0 0", fontWeight: "bold" }}>
+              <div style={{ border: "1px solid rgba(148, 163, 184, 0.18)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.04)" }}>
+                <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>Body / Mind</p>
+                <p style={{ margin: "6px 0 0", fontWeight: "bold", color: "#f8fafc" }}>
                   Stress {todayLog.stress || "N/A"}/10 • Soreness {todayLog.soreness || "N/A"}/10
                 </p>
               </div>
 
-              <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                <p style={{ margin: 0, color: "#6b7280", fontSize: 13 }}>Mood / Training</p>
-                <p style={{ margin: "6px 0 0", fontWeight: "bold" }}>
+              <div style={{ border: "1px solid rgba(148, 163, 184, 0.18)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.04)" }}>
+                <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>Mood / Training</p>
+                <p style={{ margin: "6px 0 0", fontWeight: "bold", color: "#f8fafc" }}>
                   Mood {todayLog.mood || "N/A"}/10 • Should Train: {todayLog.shouldTrainToday || "N/A"}
                 </p>
               </div>
 
-              <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                <p style={{ margin: 0, color: "#6b7280", fontSize: 13 }}>Yesterday's Workout</p>
-                <p style={{ margin: "6px 0 0", fontWeight: "bold" }}>
+              <div style={{ border: "1px solid rgba(148, 163, 184, 0.18)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.04)" }}>
+                <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>Yesterday's Workout</p>
+                <p style={{ margin: "6px 0 0", fontWeight: "bold", color: "#f8fafc" }}>
                   Completed: {todayLog.workoutCompleted || "N/A"} • Actual RPE {todayLog.actualRPE || "N/A"}
                 </p>
               </div>
 
 
-              <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                <p style={{ margin: 0, color: "#6b7280", fontSize: 13 }}>Notes</p>
-                <p style={{ margin: "6px 0 0", fontWeight: "bold", whiteSpace: "pre-wrap" }}>
+              <div style={{ border: "1px solid rgba(148, 163, 184, 0.18)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.04)" }}>
+                <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>Notes</p>
+                <p style={{ margin: "6px 0 0", fontWeight: "bold", whiteSpace: "pre-wrap", color: "#f8fafc" }}>
                   {todayLog.notes || "None"}
                 </p>
               </div>
@@ -1005,13 +1205,13 @@ export default function AthleteDashboard() {
           ) : (
             <div
               style={{
-                border: "1px solid #e5e7eb",
+                border: "1px solid rgba(148, 163, 184, 0.18)",
                 borderRadius: 12,
                 padding: 14,
-                background: "#f9fafb",
+                background: "rgba(255,255,255,0.04)",
               }}
             >
-              <p style={{ margin: 0, color: "#374151" }}>
+              <p style={{ margin: 0, color: "#cbd5e1" }}>
                 No readiness survey has been submitted for today yet.
               </p>
             </div>
@@ -1023,7 +1223,53 @@ export default function AthleteDashboard() {
         </div>
       </section>
 
-      <section style={cardStyle}>
+      <section style={{ ...cardStyle, marginTop: 18 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: 12,
+          }}
+        >
+          <h2 style={{ margin: 0, textTransform: "uppercase", fontSize: 22 }}>
+            Stress / Sleep / Readiness
+          </h2>
+        </div>
+
+        {renderScatterPlot({
+          data: athleteScatterData,
+          title: "Recent readiness scatter",
+          xLabel: "Stress score",
+          yLabel: "Sleep score",
+          fallbackMessage: "No readiness data available yet.",
+        })}
+      </section>
+
+      <section style={{ ...cardStyle, marginTop: 18 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: 12,
+          }}
+        >
+          <h2 style={{ margin: 0, textTransform: "uppercase", fontSize: 22 }}>
+            Readiness Trend
+          </h2>
+        </div>
+
+        {renderLineChart({
+          data: athleteReadinessTrend,
+          title: "Recent readiness trend",
+          fallbackMessage: "No readiness trend data available yet.",
+        })}
+      </section>
+
+      <section style={{ ...cardStyle, marginTop: 18 }}>
         <div
           style={{
             display: "flex",
@@ -1051,23 +1297,23 @@ export default function AthleteDashboard() {
         </div>
 
         {recentCoachNotes.length === 0 ? (
-          <p style={{ margin: 0, color: "#6b7280" }}>No recent coach notes yet.</p>
+          <p style={{ margin: 0, color: "#94a3b8" }}>No recent coach notes yet.</p>
         ) : (
           recentCoachNotes.map((log) => (
             <div
               key={`recent-note-${log.id}`}
               style={{
-                border: "1px solid #bfdbfe",
+                border: "1px solid rgba(47,124,255,0.25)",
                 borderRadius: 12,
                 padding: 14,
                 marginBottom: 10,
-                background: "#eff6ff",
+                background: "rgba(47,124,255,0.08)",
               }}
             >
-              <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap" }}>
+              <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap", color: "#f8fafc" }}>
                 {log.coachNote}
               </p>
-              <p style={{ margin: 0, color: "#6b7280", fontSize: 13 }}>
+              <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>
                 {log.sessionType || "Session"} • {log.sessionDate || "N/A"}
               </p>
             </div>
@@ -1100,7 +1346,7 @@ export default function AthleteDashboard() {
           {selectedSession && (
             <div
               style={{
-                borderTop: "1px solid #e5e7eb",
+                borderTop: "1px solid rgba(148, 163, 184, 0.18)",
                 paddingTop: 10,
                 marginTop: 10,
               }}
@@ -1266,7 +1512,7 @@ export default function AthleteDashboard() {
                 borderRadius: 12,
                 padding: 12,
                 marginBottom: 12,
-                background: "white",
+                background: "rgba(15, 23, 42, 0.7)",
                 wordBreak: "break-word",
               }}
             >
@@ -1293,7 +1539,7 @@ export default function AthleteDashboard() {
               </p>
 
               {log.coachNoteUpdatedAt && (
-                <p style={{ color: "#6b7280", fontSize: 13 }}>
+                <p style={{ color: "#94a3b8", fontSize: 13 }}>
                   Coach Message Sent: {formatTimestamp(log.coachNoteUpdatedAt)}
                 </p>
               )}
@@ -1318,9 +1564,9 @@ export default function AthleteDashboard() {
 
   return (
     <main
+      className={styles.dashboardPage}
       style={{
         fontFamily: "Arial, sans-serif",
-        background: "#f9fafb",
         minHeight: "100vh",
       }}
     >
@@ -1352,8 +1598,10 @@ export default function AthleteDashboard() {
         <div
           style={{
             display: "flex",
+            flexDirection: isMobile ? "column" : "row",
             justifyContent: "space-between",
-            alignItems: "center",
+            alignItems: isMobile ? "stretch" : "center",
+            gap: isMobile ? 10 : 0,
             marginBottom: 0,
           }}
         >
@@ -1362,10 +1610,10 @@ export default function AthleteDashboard() {
               type="button"
               onClick={() => setAthleteMenuOpen((current) => !current)}
               style={{
-                border: "1px solid #d1d5db",
+                border: "1px solid rgba(148,163,184,0.2)",
                 borderRadius: 12,
-                background: "white",
-                color: "#111827",
+                background: "rgba(15,23,42,0.75)",
+                color: "#f8fafc",
                 cursor: "pointer",
                 width: 44,
                 height: 44,
@@ -1385,13 +1633,17 @@ export default function AthleteDashboard() {
                   position: "absolute",
                   top: 52,
                   left: 0,
-                  background: "white",
-                  border: "1px solid #e5e7eb",
+                  background: "rgba(7, 17, 31, 0.98)",
+                  border: "1px solid rgba(148,163,184,0.22)",
                   borderRadius: 14,
-                  boxShadow: "0 10px 25px rgba(0,0,0,0.14)",
-                  padding: 8,
+                  boxShadow: "0 10px 25px rgba(0,0,0,0.18)",
+                  padding: 12,
                   zIndex: 40,
                   minWidth: 210,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  marginTop: 12,
                 }}
               >
                 {[
@@ -1410,12 +1662,13 @@ export default function AthleteDashboard() {
                       display: "block",
                       width: "100%",
                       textAlign: "left",
-                      border: "none",
+                      border: "1px solid rgba(148,163,184,0.12)",
                       borderRadius: 10,
                       padding: "12px 14px",
-                      background: activeTab === item.key ? "#111827" : "white",
-                      color: activeTab === item.key ? "white" : "#111827",
+                      background: activeTab === item.key ? "rgba(47,124,255,0.22)" : "rgba(255,255,255,0.06)",
+                      color: activeTab === item.key ? "#f8fafc" : "#e2e8f0",
                       cursor: "pointer",
+                      marginBottom: 0,
                     }}
                   >
                     {item.label}
@@ -1429,15 +1682,17 @@ export default function AthleteDashboard() {
             style={{
               display: "flex",
               alignItems: "center",
+              justifyContent: isMobile ? "space-between" : "flex-start",
               gap: 10,
+              width: isMobile ? "100%" : undefined,
             }}
           >
             <button
               onClick={handleOpenMailbox}
               style={{
                 position: "relative",
-                border: "1px solid #d1d5db",
-                background: "white",
+                border: "1px solid rgba(148,163,184,0.2)",
+                background: "rgba(15,23,42,0.75)",
                 borderRadius: 999,
                 width: 58,
                 height: 58,
@@ -1456,7 +1711,7 @@ export default function AthleteDashboard() {
                 height="28"
                 viewBox="0 0 24 24"
                 fill="none"
-                stroke="#111827"
+                stroke="#f8fafc"
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -1502,7 +1757,7 @@ export default function AthleteDashboard() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 920, margin: "0 auto", width: "100%", padding: isMobile ? "4px 12px 12px" : "4px 18px 18px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 920, margin: "0 auto", width: "100%", padding: isMobile ? "4px 10px 12px" : "4px 18px 18px", boxSizing: "border-box" }}>
 
         {activeTab === "overview" && renderOverview()}
         {activeTab === "session" && renderSessionTab()}

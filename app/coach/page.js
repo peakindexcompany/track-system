@@ -700,6 +700,60 @@ export default function CoachDashboard() {
     return "#111827";
   };
 
+  const groupPalette = [
+    "#38bdf8",
+    "#f59e0b",
+    "#a78bfa",
+    "#34d399",
+    "#f43f5e",
+    "#facc15",
+    "#60a5fa",
+    "#f472b6",
+    "#4ade80",
+    "#fb7185",
+    "#818cf8",
+    "#22d3ee",
+  ];
+
+  const getGroupColor = (index) => groupPalette[index % groupPalette.length];
+
+  const normalizeEventGroupLabel = (value) => {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "Unassigned";
+
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "400/400h/800" || normalized === "400/400h/800" || normalized === "400/400h/800") {
+      return "400/400h";
+    }
+
+    return trimmed;
+  };
+
+  const renderGroupLegend = (data) => (
+    <div style={{ marginTop: 0, borderLeft: "1px solid rgba(148,163,184,0.18)", paddingLeft: 12, minWidth: 180 }}>
+      <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#cbd5e1", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        Group colors
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        {data.map((item) => (
+          <div key={item.label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                background: item.color,
+                border: "1px solid rgba(255,255,255,0.4)",
+                flexShrink: 0,
+              }}
+            />
+            <span style={{ color: "#f8fafc", fontSize: 12, fontWeight: 600 }}>{item.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   const getReadinessStatus = (ratio) => {
     const value = Number(ratio);
 
@@ -853,8 +907,8 @@ export default function CoachDashboard() {
 
   const getUniqueEventGroups = () => {
     const groups = athleteLogs
-      .map((log) => log.eventGroup)
-      .filter((group) => group && group.trim() !== "");
+      .map((log) => normalizeEventGroupLabel(log.eventGroup))
+      .filter((group) => group && group.trim() !== "" && group !== "Unassigned");
 
     return ["All", ...Array.from(new Set(groups))];
   };
@@ -991,7 +1045,7 @@ export default function CoachDashboard() {
 
   const eventGroupOrder = [
     "Sprints/Jumps",
-    "400/400h/800",
+    "400/400h",
     "Throws",
     "Distance",
     "Mid-Distance",
@@ -1059,8 +1113,8 @@ export default function CoachDashboard() {
   padding: isMobile ? 14 : 20,
   marginBottom: 18,
   background: "rgba(15,23,42,0.75)",
-  boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
-  backdropFilter: "blur(18px)",
+  boxShadow: "none",
+  backdropFilter: "none",
   color: "#f8fafc",
 };
 
@@ -1249,6 +1303,235 @@ export default function CoachDashboard() {
   };
 
   const coachTrendNotifications = getCoachTrendNotifications();
+
+  const getGroupScatterData = () => {
+    const grouped = {};
+
+    athleteLogs.forEach((log) => {
+      const group = normalizeEventGroupLabel(log.eventGroup || "Unassigned");
+      if (!grouped[group]) grouped[group] = [];
+      grouped[group].push(log);
+    });
+
+    return Object.entries(grouped)
+      .sort(([groupA], [groupB]) => groupA.localeCompare(groupB))
+      .map(([group, logs], index) => {
+        const latest = sortLogsNewestFirst(logs).slice(0, 12);
+        const valid = latest.filter(
+          (log) =>
+            Number.isFinite(Number(log.stress)) &&
+            Number.isFinite(Number(log.sleepQuality)) &&
+            Number.isFinite(Number(log.readinessRatio))
+        );
+
+        if (valid.length === 0) return null;
+
+        const avgStress =
+          valid.reduce((sum, log) => sum + Number(log.stress || 0), 0) / valid.length;
+        const avgSleep =
+          valid.reduce((sum, log) => sum + Number(log.sleepQuality || 0), 0) / valid.length;
+        const avgReadiness =
+          valid.reduce((sum, log) => sum + Number(log.readinessRatio || 0), 0) / valid.length;
+
+        return {
+          label: normalizeEventGroupLabel(group),
+          x: Number(avgStress.toFixed(1)),
+          y: Number(avgSleep.toFixed(1)),
+          readiness: Number(avgReadiness.toFixed(2)),
+          color: getGroupColor(index),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.readiness - a.readiness);
+  };
+
+  const renderScatterPlot = ({ data, title, xLabel, yLabel, fallbackMessage }) => {
+    if (!data || data.length === 0) {
+      return (
+        <div style={{ padding: 12, color: "#9ca8b8" }}>
+          {fallbackMessage}
+        </div>
+      );
+    }
+
+    const isCompact = isMobile;
+    const width = isCompact ? 560 : 680;
+    const height = isCompact ? 240 : 280;
+    const padding = isCompact ? { top: 20, right: 16, bottom: 44, left: 62 } : { top: 26, right: 20, bottom: 54, left: 74 };
+    const xValues = data.map((point) => point.x);
+    const yValues = data.map((point) => point.y);
+    const xMin = Math.min(0, ...xValues);
+    const xMax = Math.max(10, ...xValues);
+    const yMin = Math.min(0, ...yValues);
+    const yMax = Math.max(10, ...yValues);
+    const xRange = xMax - xMin || 1;
+    const yRange = yMax - yMin || 1;
+
+    const scaleX = (value) =>
+      padding.left + ((value - xMin) / xRange) * (width - padding.left - padding.right);
+    const scaleY = (value) =>
+      height - padding.bottom - ((value - yMin) / yRange) * (height - padding.top - padding.bottom);
+
+    return (
+      <div style={{ marginTop: 12 }}>
+        <div style={{ background: "rgba(15, 23, 42, 0.35)", borderRadius: 14, padding: 8 }}>
+          <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", maxHeight: 300 }}>
+            {[0, 2.5, 5, 7.5, 10].map((tick) => {
+              const x = scaleX(tick);
+              const y = scaleY(tick);
+              return (
+                <g key={`axis-${tick}`}>
+                  <line x1={x} y1={padding.top} x2={x} y2={height - padding.bottom} stroke="rgba(148,163,184,0.18)" strokeDasharray="4 4" />
+                  <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} stroke="rgba(148,163,184,0.18)" strokeDasharray="4 4" />
+                  <text x={x} y={height - 22} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 9 : 10}>{tick.toFixed(1)}</text>
+                  <text x={padding.left - 12} y={y + 4} textAnchor="end" fill="#9ca8b8" fontSize={isCompact ? 9 : 10}>{tick.toFixed(1)}</text>
+                </g>
+              );
+            })}
+
+            <line x1={padding.left} y1={height - padding.bottom} x2={width - padding.right} y2={height - padding.bottom} stroke="#94a3b8" />
+            <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#94a3b8" />
+
+            {data.map((point, index) => (
+              <g key={`${point.label}-${index}`}>
+                <circle
+                  cx={scaleX(point.x)}
+                  cy={scaleY(point.y)}
+                  r={7 + point.readiness / 2}
+                  fill={point.color}
+                  opacity={0.9}
+                  stroke="rgba(255,255,255,0.8)"
+                  strokeWidth={1}
+                />
+              </g>
+            ))}
+
+            <text x={width / 2} y={height - 8} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>
+              {xLabel}
+            </text>
+            <text x={28} y={height / 2} transform={`rotate(-90 28 ${height / 2})`} fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>
+              {yLabel}
+            </text>
+          </svg>
+        </div>
+      </div>
+    );
+  };
+
+  const getGroupReadinessTrendData = () => {
+    const grouped = {};
+
+    athleteLogs.forEach((log) => {
+      const group = normalizeEventGroupLabel(log.eventGroup || "Unassigned");
+      if (!grouped[group]) grouped[group] = [];
+      grouped[group].push(log);
+    });
+
+    return Object.entries(grouped)
+      .sort(([groupA], [groupB]) => groupA.localeCompare(groupB))
+      .map(([group, logs], index) => {
+        const ordered = sortLogsNewestFirst(logs).slice(0, 8).reverse();
+        const points = ordered
+          .map((log) => ({
+            label: (log.sessionDate || "").slice(5) || "n/a",
+            value: Number(log.readinessRatio || 0),
+          }))
+          .filter((point) => Number.isFinite(point.value));
+
+        return {
+          label: normalizeEventGroupLabel(group),
+          points,
+          color: getGroupColor(index),
+        };
+      })
+      .filter((entry) => entry.points.length > 0);
+  };
+
+  const renderLineChart = ({ data, title, fallbackMessage }) => {
+    if (!data || data.length === 0) {
+      return <div style={{ padding: 12, color: "#9ca8b8" }}>{fallbackMessage}</div>;
+    }
+
+    const isCompact = isMobile;
+    const width = isCompact ? 560 : 680;
+    const height = isCompact ? 230 : 270;
+    const padding = isCompact ? { top: 24, right: 24, bottom: 44, left: 62 } : { top: 32, right: 30, bottom: 52, left: 74 };
+    const allValues = data.flatMap((series) => series.points.map((point) => point.value));
+    const minY = Math.min(0, ...allValues);
+    const maxY = Math.max(2.2, ...allValues);
+    const range = maxY - minY || 1;
+
+    const scaleX = (index, total) =>
+      padding.left + (index / Math.max(total - 1, 1)) * (width - padding.left - padding.right);
+    const scaleY = (value) =>
+      height - padding.bottom - ((value - minY) / range) * (height - padding.top - padding.bottom);
+
+    return (
+      <div style={{ marginTop: 12 }}>
+        <div style={{ background: "rgba(15, 23, 42, 0.35)", borderRadius: 14, padding: 8 }}>
+          <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", maxHeight: 300 }}>
+            {[0, 0.5, 1, 1.5, 2].map((tick) => {
+              const y = scaleY(tick);
+              return (
+                <g key={`line-axis-${tick}`}>
+                  <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} stroke="rgba(148,163,184,0.18)" strokeDasharray="4 4" />
+                  <text x={padding.left - 12} y={y + 4} textAnchor="end" fill="#9ca8b8" fontSize="10">{tick.toFixed(1)}</text>
+                </g>
+              );
+            })}
+
+            <line x1={padding.left} y1={height - padding.bottom} x2={width - padding.right} y2={height - padding.bottom} stroke="#94a3b8" />
+            <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#94a3b8" />
+
+            {data.map((series) => (
+              <g key={series.label}>
+                <path
+                  d={series.points
+                    .map((point, index) => `${index === 0 ? "M" : "L"}${scaleX(index, series.points.length)},${scaleY(point.value)}`)
+                    .join(" ")}
+                  fill="none"
+                  stroke={series.color}
+                  strokeWidth="2.8"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+                {series.points.map((point, index) => (
+                  <g key={`${series.label}-${point.label}-${index}`}>
+                    <circle cx={scaleX(index, series.points.length)} cy={scaleY(point.value)} r={4.5} fill={series.color} stroke="#fff" strokeWidth="1" />
+                  </g>
+                ))}
+              </g>
+            ))}
+
+            {data.some((series) => series.points.length > 0) && (
+              <g>
+                <text x={width / 2} y={height - 28} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>Recent sessions</text>
+                {data.flatMap((series) =>
+                  series.points.map((point, index) => (
+                    <text
+                      key={`${series.label}-${point.label}-${index}`}
+                      x={scaleX(index, series.points.length)}
+                      y={height - 10}
+                      textAnchor="middle"
+                      fill="#9ca8b8"
+                      fontSize={isCompact ? 8 : 9}
+                    >
+                      {point.label}
+                    </text>
+                  ))
+                )}
+              </g>
+            )}
+
+            <text x={28} y={height / 2} transform={`rotate(-90 28 ${height / 2})`} fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>Readiness</text>
+          </svg>
+        </div>
+      </div>
+    );
+  };
+
+  const groupScatterData = getGroupScatterData();
+  const groupReadinessTrendData = getGroupReadinessTrendData();
 
   if (loading) return <p style={{ padding: 20 }}>Loading...</p>;
 
@@ -1727,13 +2010,13 @@ export default function CoachDashboard() {
         </div>
       )}
 
-      <div style={{ maxWidth: 1000, margin: "0 auto", width: "100%", marginBottom: 20 }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", width: "100%", marginBottom: isMobile ? 12 : 20, padding: isMobile ? "0 10px" : 0 }}>
         <div
           style={{
             display: "flex",
             flexDirection: isMobile ? "column" : "row",
             justifyContent: "space-between",
-            gap: isMobile ? 12 : 16,
+            gap: isMobile ? 10 : 16,
             alignItems: isMobile ? "stretch" : "flex-start",
           }}
         >
@@ -1743,9 +2026,9 @@ export default function CoachDashboard() {
                 type="button"
                 onClick={() => setCoachMenuOpen((current) => !current)}
                 style={{
-                  border: "1px solid rgba(148,163,184,0.18)",
+                  border: "1px solid rgba(148,163,184,0.2)",
                   borderRadius: 12,
-                  background: "rgba(255,255,255,0.08)",
+                  background: "rgba(15,23,42,0.75)",
                   color: "#f8fafc",
                   cursor: "pointer",
                   width: 44,
@@ -1754,7 +2037,7 @@ export default function CoachDashboard() {
                   alignItems: "center",
                   justifyContent: "center",
                   fontSize: 24,
-                  boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
                 }}
                 aria-label="Open coach menu"
               >
@@ -1763,22 +2046,29 @@ export default function CoachDashboard() {
 
               {coachMenuOpen && (
                 <div
-                  className={styles.smallCard}
                   style={{
+                    position: "absolute",
+                    top: 52,
+                    left: 0,
+                    background: "rgba(7, 17, 31, 0.98)",
+                    border: "1px solid rgba(148,163,184,0.22)",
+                    borderRadius: 14,
+                    boxShadow: "0 10px 25px rgba(0,0,0,0.18)",
+                    padding: 12,
+                    zIndex: 40,
+                    minWidth: 220,
                     display: "flex",
                     flexDirection: "column",
                     gap: 8,
                     marginTop: 12,
-                    padding: 16,
-                    minWidth: 220,
                   }}
                 >
-              {[
-                { key: "overview", label: "Overview" },
-                { key: "planning", label: "Planning" },
-                { key: "averages", label: "Team Averages" },
-                { key: "logs", label: "Athlete Logs" },
-              ].map((item) => (
+                  {[
+                    { key: "overview", label: "Overview" },
+                    { key: "planning", label: "Planning" },
+                    { key: "averages", label: "Team Averages" },
+                    { key: "logs", label: "Athlete Logs" },
+                  ].map((item) => (
                     <button
                       key={item.key}
                       type="button"
@@ -1786,9 +2076,19 @@ export default function CoachDashboard() {
                         setActiveTab(item.key);
                         setCoachMenuOpen(false);
                       }}
-                      className={`${styles.dashboardTabButton} ${
-                        activeTab === item.key ? styles.dashboardTabButtonActive : ""
-                      }`}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        border: "1px solid rgba(148,163,184,0.12)",
+                        borderRadius: 10,
+                        padding: "12px 14px",
+                        background: activeTab === item.key ? "rgba(47,124,255,0.22)" : "rgba(255,255,255,0.06)",
+                        color: activeTab === item.key ? "#f8fafc" : "#e2e8f0",
+                        cursor: "pointer",
+                        marginBottom: 0,
+                        fontWeight: activeTab === item.key ? 700 : 500,
+                      }}
                     >
                       {item.label}
                     </button>
@@ -1836,8 +2136,22 @@ export default function CoachDashboard() {
           >
             <button
               onClick={handleOpenMailbox}
-              className={styles.dashboardIconButton}
               title="Mailbox"
+              style={{
+                position: "relative",
+                border: "1px solid rgba(148,163,184,0.2)",
+                background: "rgba(15,23,42,0.75)",
+                borderRadius: 999,
+                width: 58,
+                height: 58,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: isMobile ? 0 : 8,
+                boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
+                color: "#f8fafc",
+              }}
             >
               {renderEnvelopeIcon()}
 
@@ -1861,23 +2175,62 @@ export default function CoachDashboard() {
               )}
             </button>
 
-            <button onClick={handleSignOut} className={styles.dashboardButton}>
-              Sign Out
-            </button>
+            <div
+              style={{
+                position: "relative",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: isMobile ? 0 : 8,
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  inset: "-4px",
+                  borderRadius: 14,
+                  background: "rgba(47, 124, 255, 0.22)",
+                  filter: "blur(16px)",
+                  zIndex: 0,
+                }}
+              />
+              <button
+                onClick={handleSignOut}
+                style={{
+                  position: "relative",
+                  zIndex: 1,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "11px 16px",
+                  border: "1px solid rgba(148,163,184,0.2)",
+                  borderRadius: 10,
+                  background: "rgba(15,23,42,0.75)",
+                  color: "#f8fafc",
+                  cursor: "pointer",
+                  minHeight: 44,
+                  fontWeight: "700",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
+                }}
+              >
+                Sign Out
+              </button>
+            </div>
           </div>
         </div>
 
 
         {activeTab === "overview" && (
           <>
-            <div className={styles.dashboardCard} style={{ marginTop: 32 }}>
+            <div className={styles.dashboardCard} style={{ marginTop: isMobile ? 18 : 32, padding: isMobile ? "14px" : undefined }}>
               <div
                 style={{
                   display: "flex",
+                  flexDirection: isMobile ? "column" : "row",
                   justifyContent: "space-between",
-                  gap: 12,
-                  alignItems: "center",
-                  marginBottom: 12,
+                  gap: isMobile ? 8 : 12,
+                  alignItems: isMobile ? "flex-start" : "center",
+                  marginBottom: isMobile ? 10 : 12,
                 }}
               >
                 <div>
@@ -1911,7 +2264,7 @@ export default function CoachDashboard() {
                   style={{
                     display: "grid",
                     gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
-                    gap: 10,
+                    gap: isMobile ? 8 : 10,
                   }}
                 >
                   {todaysPlannedSessions.map((session) => (
@@ -1945,8 +2298,8 @@ export default function CoachDashboard() {
             </div>
 
             <div
+  className={styles.dashboardCard}
   style={{
-    ...cardStyle,
     marginTop: 22,
     border:
       atRiskAthletes.length > 0 ||
@@ -2097,7 +2450,8 @@ export default function CoachDashboard() {
 
               <div
                 style={{
-                  ...cardStyle,
+                  className: styles.coachCard,
+                  boxSizing: "border-box",
                   marginTop: 24,
                   display: "flex",
                   justifyContent: "space-between",
@@ -2290,7 +2644,62 @@ export default function CoachDashboard() {
               </div>
             )}
 
-            <div className={styles.dashboardCard}>
+            <div className={styles.dashboardCard} style={{ marginTop: 18 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  alignItems: "flex-start",
+                  marginBottom: 12,
+                }}
+              >
+                <div>
+                  <h2 className={styles.dashboardHeadingReset}>Group Readiness Overview</h2>
+                  <p className={styles.dashboardSubtitle}>
+                    Stress, recovery, and recent trend movement by group.
+                  </p>
+                </div>
+                <div style={{ borderLeft: "1px solid rgba(148,163,184,0.18)", paddingLeft: 12, minWidth: 180 }}>
+                  <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#cbd5e1", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                    Group colors
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {groupScatterData.map((item) => (
+                      <div key={item.label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <span
+                          style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: "50%",
+                            background: item.color,
+                            border: "1px solid rgba(255,255,255,0.4)",
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span style={{ color: "#f8fafc", fontSize: 12, fontWeight: 600 }}>{item.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {renderScatterPlot({
+                data: groupScatterData,
+                title: "",
+                xLabel: "Stress score",
+                yLabel: "Sleep score",
+                fallbackMessage: "No group readiness data available yet.",
+              })}
+
+              {renderLineChart({
+                data: groupReadinessTrendData,
+                title: "",
+                fallbackMessage: "No readiness trend data available for groups yet.",
+              })}
+            </div>
+
+            <div className={styles.dashboardCard} style={{ marginTop: 18 }}>
               <div
                 style={{
                   display: "flex",
@@ -2331,7 +2740,7 @@ export default function CoachDashboard() {
                   style={{
                     display: "grid",
                     gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
-                    gap: 10,
+                    gap: isMobile ? 8 : 10,
                   }}
                 >
                   {coachTrendNotifications.slice(0, 8).map((item, index) => (
@@ -2401,105 +2810,115 @@ export default function CoachDashboard() {
         )}
 
         {activeTab === "planning" && (
-          <section>
-            <div className={styles.dashboardCard}>
-              <h2 className={styles.dashboardHeadingReset}>
-                {editingSessionId ? "Edit Planned Session" : "Plan Session"}
-              </h2>
+  <>
+    <div className={styles.dashboardCard} style={{ marginTop: isMobile ? 18 : 32, padding: isMobile ? "14px" : undefined }}>
+      <h2 className={styles.dashboardHeadingReset}>Plan Session</h2>
+      <p className={styles.dashboardSubtitle}>
+        Create and manage planned sessions for your athletes.
+      </p>
 
-              <input
-                className={styles.dashboardInput}
-                placeholder="Session type"
-                value={sessionType}
-                onChange={(e) => setSessionType(e.target.value)}
-              />
+      <input
+        className={styles.dashboardInput}
+        placeholder="Session type"
+        value={sessionType}
+        onChange={(e) => setSessionType(e.target.value)}
+      />
 
-              <select
-                className={styles.dashboardInput}
-                value={sessionGroup}
-                onChange={(e) => setSessionGroup(e.target.value)}
-              >
-                <option value="All">All</option>
-                {eventGroupOrder.map((group) => (
-                  <option key={group} value={group}>
-                    {group}
-                  </option>
-                ))}
-              </select>
+      <select
+        className={styles.dashboardInput}
+        value={sessionGroup}
+        onChange={(e) => setSessionGroup(e.target.value)}
+      >
+        <option value="All">All</option>
+        {eventGroupOrder.map((group) => (
+          <option key={group} value={group}>
+            {group}
+          </option>
+        ))}
+      </select>
 
-              <input
-                className={styles.dashboardInput}
-                type="date"
-                value={sessionDate}
-                onChange={(e) => setSessionDate(e.target.value)}
-              />
+      <input
+        className={styles.dashboardInput}
+        type="date"
+        value={sessionDate}
+        onChange={(e) => setSessionDate(e.target.value)}
+      />
 
-              <input
-                className={styles.dashboardInput}
-                type="number"
-                min="1"
-                max="10"
-                placeholder="Planned RPE"
-                value={plannedRPE}
-                onChange={(e) => setPlannedRPE(e.target.value)}
-              />
+      <input
+        className={styles.dashboardInput}
+        type="number"
+        min="1"
+        max="10"
+        placeholder="Planned RPE"
+        value={plannedRPE}
+        onChange={(e) => setPlannedRPE(e.target.value)}
+      />
 
-              <textarea
-                className={styles.dashboardTextarea}
-                placeholder="Workout notes"
-                value={workoutNotes}
-                onChange={(e) => setWorkoutNotes(e.target.value)}
-              />
+      <textarea
+        className={styles.dashboardTextarea}
+        placeholder="Workout notes"
+        value={workoutNotes}
+        onChange={(e) => setWorkoutNotes(e.target.value)}
+      />
 
-              <button onClick={handleSavePlannedSession} className={styles.dashboardButton}>
-                {editingSessionId ? "Update Session" : "Save Session"}
-              </button>
+      <button onClick={handleSavePlannedSession} className={styles.dashboardButton}>
+        {editingSessionId ? "Update Session" : "Save Session"}
+      </button>
 
-              {editingSessionId && (
-                <button onClick={handleCancelEdit} className={styles.dashboardButtonSecondary}>
-                  Cancel Edit
-                </button>
-              )}
-            </div>
+      {editingSessionId && (
+        <button onClick={handleCancelEdit} className={styles.dashboardButtonSecondary}>
+          Cancel Edit
+        </button>
+      )}
+    </div>
 
-            <div className={styles.dashboardCard}>
-              <h2 className={styles.dashboardHeadingReset}>Planned Sessions</h2>
+<div className={styles.dashboardCard} style={{ marginTop: 16, padding: isMobile ? "14px" : undefined }}>
+      <h2 className={styles.dashboardHeadingReset}>Planned Sessions</h2>
 
-              {plannedSessions.length === 0 ? (
-                <p>No planned sessions yet.</p>
-              ) : (
-                plannedSessions.map((session) => (
-                  <div
-                    key={session.id}
-                    className={styles.smallCard}
-                    style={{ marginBottom: 10 }}
-                  >
-                    <p className={styles.dashboardHeadingReset}>
-                      <strong>{session.sessionType || "Session"}</strong>
-                    </p>
-                    <p>Group: {session.sessionGroup || "All"}</p>
-                    <p>Date: {session.sessionDate || "N/A"}</p>
-                    <p>Planned RPE: {session.plannedRPE || "N/A"}</p>
-                    <p style={{ whiteSpace: "pre-wrap" }}>
-                      Notes: {session.workoutNotes || "None"}
-                    </p>
+      {plannedSessions.length === 0 ? (
+        <p>No planned sessions yet.</p>
+      ) : (
+        plannedSessions.map((session) => (
+          <div
+            key={session.id}
+            className={styles.smallCard}
+            style={{ marginBottom: 10 }}
+          >
+            <p className={styles.dashboardHeadingReset}>
+              <strong>{session.sessionType || "Session"}</strong>
+            </p>
 
-                    <button onClick={() => handleEditSession(session)} className={styles.dashboardButtonAccent}>
-                      Edit
-                    </button>
-                    <button onClick={() => handleDeleteSession(session.id)} className={styles.dashboardButtonDanger}>
-                      Delete
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        )}
+            <p>Group: {session.sessionGroup || "All"}</p>
+            <p>Date: {session.sessionDate || "N/A"}</p>
+            <p>Planned RPE: {session.plannedRPE || "N/A"}</p>
+
+            <p style={{ whiteSpace: "pre-wrap" }}>
+              Notes: {session.workoutNotes || "None"}
+            </p>
+
+            <button
+              onClick={() => handleEditSession(session)}
+              className={styles.dashboardButtonAccent}
+            >
+              Edit
+            </button>
+
+            <button
+              onClick={() => handleDeleteSession(session.id)}
+              className={styles.dashboardButtonDanger}
+            >
+              Delete
+            </button>
+          </div>
+        ))
+      )}
+    </div>
+  </>
+)}
 
         {activeTab === "averages" && (
           <section>
-            <div className={styles.dashboardCard}>
+            <div className={styles.dashboardCard} style={{ marginTop: isMobile ? 18 : 32, padding: isMobile ? "14px" : undefined }}>
               <h2 className={styles.dashboardHeadingReset}>Team Averages</h2>
               <p className={styles.dashboardSubtitle}>
                 Compare short-term, weekly, and baseline readiness trends.
@@ -2532,10 +2951,10 @@ export default function CoachDashboard() {
         )}
 
         {activeTab === "logs" && (
-          <section id="coach-athlete-logs-section">
+          <section id="coach-athlete-logs-section" style={{ marginTop: isMobile ? 18 : 32 }}>
             {renderFilters()}
 
-            <div className={styles.dashboardCard}>
+            <div className={styles.dashboardCard} style={{ marginTop: 16, padding: isMobile ? "14px" : undefined }}>
               <h2 className={styles.dashboardHeadingReset}>Athlete Readiness Logs</h2>
               <p className={styles.dashboardSubtitle}>
                 Showing {filteredAthleteLogs.length} of {athleteLogs.length} logs
