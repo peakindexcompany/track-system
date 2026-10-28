@@ -19,6 +19,105 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 
+const formatDateKey = (date) =>
+  [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+
+const formatDateDisplay = (value) => {
+  if (!value) return "N/A";
+
+  if (typeof value === "string") {
+    const dateOnlyMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnlyMatch) {
+      return `${dateOnlyMatch[2]}/${dateOnlyMatch[3]}/${dateOnlyMatch[1]}`;
+    }
+  }
+
+  const date = value.toDate
+    ? value.toDate()
+    : value instanceof Date
+    ? value
+    : new Date(value);
+
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  return date.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+};
+
+const getSundayStart = (date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate() - date.getDay());
+
+const getISOWeekValue = (date) => {
+  const thursday = new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+  );
+  const dayOfWeek = thursday.getUTCDay() || 7;
+  thursday.setUTCDate(thursday.getUTCDate() + 4 - dayOfWeek);
+  const yearStart = Date.UTC(thursday.getUTCFullYear(), 0, 1);
+  const weekNumber = Math.ceil(
+    ((thursday.getTime() - yearStart) / 86400000 + 1) / 7
+  );
+
+  return `${thursday.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+};
+
+const getMondayFromISOWeek = (value) => {
+  const match = value.match(/^(\d{4})-W(\d{2})$/);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  const januaryFourth = new Date(year, 0, 4);
+  const monday = new Date(year, 0, 4);
+  monday.setDate(
+    monday.getDate() - ((januaryFourth.getDay() + 6) % 7) + (week - 1) * 7
+  );
+
+  return getISOWeekValue(monday) === value ? monday : null;
+};
+
+const getCalendarDates = (date, view) => {
+  const start =
+    view === "week"
+      ? getSundayStart(date)
+      : getSundayStart(new Date(date.getFullYear(), date.getMonth(), 1));
+  const dayCount =
+    view === "week"
+      ? 7
+      : Math.ceil(
+          (new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate() +
+            new Date(date.getFullYear(), date.getMonth(), 1).getDay()) /
+            7
+        ) * 7;
+
+  return Array.from({ length: dayCount }, (_, index) => {
+    const calendarDate = new Date(start);
+    calendarDate.setDate(start.getDate() + index);
+    return calendarDate;
+  });
+};
+
+const getCalendarItemDateKey = (item) => {
+  const explicitDate = item.sessionDate || item.workoutDate || "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(explicitDate)) {
+    return explicitDate;
+  }
+
+  const timestamp = item.createdAt?.toDate
+    ? item.createdAt.toDate()
+    : item.createdAt;
+  const date = timestamp ? new Date(timestamp) : null;
+
+  return date && !Number.isNaN(date.getTime()) ? formatDateKey(date) : null;
+};
+
 export default function AthleteDashboard() {
   const router = useRouter();
 
@@ -31,8 +130,34 @@ export default function AthleteDashboard() {
   const [isMobile, setIsMobile] = useState(false);
 
   const [activeTab, setActiveTab] = useState("overview");
+  const [workoutSplits, setWorkoutSplits] = useState([]);
+  const [splitFormOpen, setSplitFormOpen] = useState(false);
+  const [openDatePicker, setOpenDatePicker] = useState(null);
+  const [selectedSplitId, setSelectedSplitId] = useState(null);
+  const [editingSplitId, setEditingSplitId] = useState(null);
+  const [splitDate, setSplitDate] = useState("");
+  const [splitComment, setSplitComment] = useState("");
+  const [workoutCalendarDate, setWorkoutCalendarDate] = useState(() => new Date());
+  const [workoutCalendarView, setWorkoutCalendarView] = useState("week");
+  const [splitCalendarDate, setSplitCalendarDate] = useState(() => new Date());
+  const [splitCalendarView, setSplitCalendarView] = useState("week");
+  const [historyCalendarDate, setHistoryCalendarDate] = useState(() => new Date());
+  const [historyCalendarView, setHistoryCalendarView] = useState("week");
   const [athleteMenuOpen, setAthleteMenuOpen] = useState(false);
   const [mailboxOpen, setMailboxOpen] = useState(false);
+
+  useEffect(() => {
+    const handleOutside = (event) => {
+      if (!event.target.closest('[data-dropdown="nav"]')) setAthleteMenuOpen(false);
+      if (!event.target.closest('[data-dropdown="date"]')) setOpenDatePicker(null);
+    };
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("touchstart", handleOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("touchstart", handleOutside);
+    };
+  }, []);
 
   const [plannedSessions, setPlannedSessions] = useState([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
@@ -121,7 +246,9 @@ export default function AthleteDashboard() {
   };
 
   const formatSessionDate = (session) => {
-    return session?.sessionDate || "No Date";
+    return session?.sessionDate
+      ? formatDateDisplay(session.sessionDate)
+      : "No Date";
   };
 
   const formatTimestamp = (timestamp) => {
@@ -140,6 +267,7 @@ export default function AthleteDashboard() {
   useEffect(() => {
     let unsubscribeSessions = null;
     let unsubscribeLogs = null;
+    let unsubscribeSplits = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
       if (!currentUser) {
@@ -241,6 +369,24 @@ export default function AthleteDashboard() {
 
             setReadinessLogs(sortLogsNewestFirst(logsData));
           });
+
+          const splitsQuery = query(
+            collection(db, "workout_splits"),
+            where("userId", "==", currentUser.uid)
+          );
+
+          unsubscribeSplits = onSnapshot(splitsQuery, (snapshot) => {
+            const splitsData = snapshot.docs.map((d) => ({
+              id: d.id,
+              ...d.data(),
+            }));
+
+            setWorkoutSplits(
+              splitsData.sort((a, b) =>
+                String(b.workoutDate || "").localeCompare(String(a.workoutDate || ""))
+              )
+            );
+          });
         }
       } catch (error) {
         console.error(error);
@@ -255,6 +401,7 @@ export default function AthleteDashboard() {
 
       if (unsubscribeSessions) unsubscribeSessions();
       if (unsubscribeLogs) unsubscribeLogs();
+      if (unsubscribeSplits) unsubscribeSplits();
     };
   }, [router]);
 
@@ -431,6 +578,83 @@ export default function AthleteDashboard() {
     }
   };
 
+  const resetSplitForm = () => {
+    setSplitFormOpen(false);
+    setEditingSplitId(null);
+    setSplitDate("");
+    setSplitComment("");
+  };
+
+  const handleStartAddWorkout = () => {
+    resetSplitForm();
+    setSplitDate(getTodayDateString());
+    setSplitFormOpen(true);
+  };
+
+  const handleEditWorkoutSplit = (workout) => {
+    setEditingSplitId(workout.id);
+    setSplitDate(workout.workoutDate || "");
+    setSplitComment(workout.comment || workout.notes || "");
+    setSplitFormOpen(true);
+  };
+
+  const handleSaveWorkoutSplit = async (e) => {
+    e.preventDefault();
+
+    if (!athleteProfile || !user) {
+      showStatus("Athlete profile not loaded.");
+      return;
+    }
+
+    if (!splitDate || !splitComment.trim()) {
+      showStatus("Enter a workout date and comment.");
+      return;
+    }
+
+    const workoutData = {
+      workoutDate: splitDate,
+      comment: splitComment.trim(),
+    };
+
+    try {
+      if (editingSplitId) {
+        await updateDoc(doc(db, "workout_splits", editingSplitId), {
+          ...workoutData,
+          updatedAt: serverTimestamp(),
+        });
+        showStatus("Comment updated and shared with your coach.");
+      } else {
+        await addDoc(collection(db, "workout_splits"), {
+          ...workoutData,
+          userId: user.uid,
+          name: athleteProfile.name || user.email,
+          teamCode,
+          eventGroup,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        showStatus("Comment saved and shared with your coach.");
+      }
+
+      resetSplitForm();
+    } catch (error) {
+      console.error(error);
+      showStatus("Error saving workout.");
+    }
+  };
+
+  const handleDeleteWorkoutSplit = async (workoutId) => {
+    if (!window.confirm("Delete this workout?")) return;
+
+    try {
+      await deleteDoc(doc(db, "workout_splits", workoutId));
+      showStatus("Workout deleted.");
+    } catch (error) {
+      console.error(error);
+      showStatus("Error deleting workout.");
+    }
+  };
+
   const handleOpenMailbox = () => {
     setMailboxOpen(true);
   };
@@ -537,7 +761,7 @@ export default function AthleteDashboard() {
     width: isMobile ? "100%" : undefined,
     minHeight: 44,
     fontWeight: "bold",
-    boxShadow: "0 10px 30px rgba(47,124,255,.35)",
+    boxShadow: "0 6px 18px rgba(47,124,255,.12)",
   };
 
   const secondaryButtonStyle = {
@@ -1083,7 +1307,7 @@ export default function AthleteDashboard() {
                   <p style={{ margin: 0, fontWeight: "bold", color: "#166534" }}>
                     Today’s workout assigned.
                   </p>
-                  <p style={{ margin: "4px 0 0", color: "#cbd5e1" }}>
+                  <p style={{ margin: "4px 0 0", color: "#14532d" }}>
                     You’re set to get after it.
                   </p>
                 </div>
@@ -1221,9 +1445,74 @@ export default function AthleteDashboard() {
             {todayLog ? "Update Readiness Survey" : "Complete Readiness Survey"}
           </button>
         </div>
+
+        <div
+          style={{
+            borderTop: "1px solid rgba(148, 163, 184, 0.18)",
+            paddingTop: 18,
+            marginTop: 18,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+              marginBottom: 12,
+            }}
+          >
+            <h3 style={{ margin: 0, textTransform: "uppercase" }}>Recent Coach Notes</h3>
+            <button
+              onClick={() => setActiveTab("history")}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: "#2563eb",
+                fontWeight: "bold",
+                cursor: "pointer",
+              }}
+            >
+              View All
+            </button>
+          </div>
+
+          {recentCoachNotes.length === 0 ? (
+            <p style={{ margin: 0, color: "#94a3b8" }}>No recent coach notes yet.</p>
+          ) : (
+            recentCoachNotes.map((log) => (
+              <div
+                key={`recent-note-${log.id}`}
+                style={{
+                  border: "1px solid rgba(47,124,255,0.25)",
+                  borderRadius: 12,
+                  padding: 14,
+                  marginBottom: 10,
+                  background: "rgba(47,124,255,0.08)",
+                }}
+              >
+                <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap", color: "#f8fafc" }}>
+                  {log.coachNote}
+                </p>
+                <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>
+                  {log.sessionType || "Session"} • {log.sessionDate || "N/A"}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
       </section>
 
-      <section style={{ ...cardStyle, marginTop: 18 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
+          gap: 18,
+          marginTop: 18,
+          alignItems: "stretch",
+        }}
+      >
+      <section style={{ ...cardStyle, marginTop: 0, minWidth: 0 }}>
         <div
           style={{
             display: "flex",
@@ -1247,7 +1536,7 @@ export default function AthleteDashboard() {
         })}
       </section>
 
-      <section style={{ ...cardStyle, marginTop: 18 }}>
+      <section style={{ ...cardStyle, marginTop: 0, minWidth: 0 }}>
         <div
           style={{
             display: "flex",
@@ -1268,103 +1557,595 @@ export default function AthleteDashboard() {
           fallbackMessage: "No readiness trend data available yet.",
         })}
       </section>
-
-      <section style={{ ...cardStyle, marginTop: 18 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-            marginBottom: 12,
-          }}
-        >
-          <h2 style={{ margin: 0, textTransform: "uppercase", fontSize: 22 }}>
-            Recent Coach Notes
-          </h2>
-          <button
-            onClick={() => setActiveTab("history")}
-            style={{
-              border: "none",
-              background: "transparent",
-              color: "#2563eb",
-              fontWeight: "bold",
-              cursor: "pointer",
-            }}
-          >
-            View All
-          </button>
-        </div>
-
-        {recentCoachNotes.length === 0 ? (
-          <p style={{ margin: 0, color: "#94a3b8" }}>No recent coach notes yet.</p>
-        ) : (
-          recentCoachNotes.map((log) => (
-            <div
-              key={`recent-note-${log.id}`}
-              style={{
-                border: "1px solid rgba(47,124,255,0.25)",
-                borderRadius: 12,
-                padding: 14,
-                marginBottom: 10,
-                background: "rgba(47,124,255,0.08)",
-              }}
-            >
-              <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap", color: "#f8fafc" }}>
-                {log.coachNote}
-              </p>
-              <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>
-                {log.sessionType || "Session"} • {log.sessionDate || "N/A"}
-              </p>
-            </div>
-          ))
-        )}
-      </section>
+      </div>
     </>
   );
 
-  const renderSessionTab = () => (
-    <section style={cardStyle}>
-      <h2 style={{ marginTop: 0 }}>Select Session</h2>
+  const renderCalendar = ({
+    title,
+    items,
+    view,
+    setView,
+    date,
+    setDate,
+    renderItem,
+    emptyMessage,
+    emptyDayLabel = "No sessions",
+    actions = null,
+    beforeCalendar = null,
+    afterCalendar = null,
+  }) => {
+    const calendarDates = getCalendarDates(date, view);
+    const weekStartDate = getSundayStart(date);
+    const itemsByDate = {};
+    const undatedItems = [];
 
-      {plannedSessions.length === 0 ? (
-        <p>No planned sessions assigned to your group yet.</p>
-      ) : (
-        <>
-          <select
-            style={inputStyle}
-            value={selectedSessionId}
-            onChange={(e) => handleSelectedSessionChange(e.target.value)}
+    items.forEach((item) => {
+      const dateKey = getCalendarItemDateKey(item);
+      if (!dateKey) {
+        undatedItems.push(item);
+        return;
+      }
+
+      if (!itemsByDate[dateKey]) itemsByDate[dateKey] = [];
+      itemsByDate[dateKey].push(item);
+    });
+    const visibleCalendarDates =
+      isMobile && view === "month"
+        ? calendarDates.filter(
+            (calendarDate) =>
+              (itemsByDate[formatDateKey(calendarDate)] || []).length > 0
+          )
+        : calendarDates;
+
+    const navigateCalendar = (direction) => {
+      setDate((currentDate) => {
+        if (view === "week") {
+          const nextWeek = getSundayStart(currentDate);
+          nextWeek.setDate(nextWeek.getDate() + direction * 7);
+          return nextWeek;
+        }
+
+        return new Date(
+          currentDate.getFullYear(),
+          currentDate.getMonth() + direction,
+          1
+        );
+      });
+    };
+
+    return (
+      <section style={cardStyle}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: isMobile ? "stretch" : "center",
+            justifyContent: "space-between",
+            flexDirection: isMobile ? "column" : "row",
+            gap: 12,
+            marginBottom: 16,
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0 }}>{title}</h2>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: isMobile ? "stretch" : "center",
+              flexDirection: isMobile ? "column" : "row",
+              gap: 8,
+            }}
           >
-            {plannedSessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {formatSessionDate(s)} — {s.sessionType} — {s.sessionGroup || "All"} — RPE {s.plannedRPE}
-              </option>
-            ))}
-          </select>
-
-          {selectedSession && (
-            <div
+            <select
               style={{
-                borderTop: "1px solid rgba(148, 163, 184, 0.18)",
-                paddingTop: 10,
-                marginTop: 10,
+                ...inputStyle,
+                width: isMobile ? "100%" : "auto",
+                minWidth: isMobile ? undefined : 130,
+                margin: 0,
               }}
+              value={view}
+              onChange={(event) => setView(event.target.value)}
+              aria-label={`${title} calendar view`}
             >
-              <p>
-                <strong>{selectedSession.sessionType}</strong>
-              </p>
-              <p>Date: {selectedSession.sessionDate || "N/A"}</p>
-              <p>Group: {selectedSession.sessionGroup || "All"}</p>
-              <p>Planned RPE: {selectedSession.plannedRPE}</p>
-              <p style={{ whiteSpace: "pre-wrap" }}>
-                Notes: {selectedSession.workoutNotes || "None"}
-              </p>
+              <option value="week">Weekly view</option>
+              <option value="month">Monthly view</option>
+            </select>
+            <div style={{ position: "relative", width: isMobile ? "100%" : undefined }} data-dropdown="date">
+              <button
+                type="button"
+                onClick={() => setOpenDatePicker(openDatePicker === title ? null : title)}
+                aria-expanded={openDatePicker === title}
+                aria-label={`Select ${title.toLowerCase()} month and year`}
+                style={{
+                  ...inputStyle,
+                  margin: 0,
+                  width: "100%",
+                  minWidth: isMobile ? undefined : 170,
+                  textAlign: "left",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {date.toLocaleDateString("en-US", { month: "long", year: "numeric" })} ▾
+              </button>
+              {openDatePicker === title && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 6px)",
+                    left: 0,
+                    zIndex: 20,
+                    width: isMobile ? "100%" : 320,
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid rgba(148,163,184,0.3)",
+                    background: "#0f172a",
+                    boxShadow: "0 12px 30px rgba(0,0,0,0.45)",
+                  }}
+                >
+                  <select
+                    style={{ ...inputStyle, margin: "0 0 10px", width: "100%" }}
+                    value={date.getFullYear()}
+                    onChange={(event) =>
+                      setDate(new Date(Number(event.target.value), date.getMonth(), 1))
+                    }
+                    aria-label="Select year"
+                  >
+                    {Array.from({ length: 201 }, (_, i) => 1900 + i).map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+                    {Array.from({ length: 12 }, (_, month) => {
+                      const active = date.getMonth() === month;
+                      return (
+                        <button
+                          key={month}
+                          type="button"
+                          onClick={() => {
+                            setDate(new Date(date.getFullYear(), month, 1));
+                            setOpenDatePicker(null);
+                          }}
+                          style={{
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                            color: "#f8fafc",
+                            padding: "8px 4px",
+                            borderRadius: 10,
+                            fontWeight: active ? 700 : 400,
+                            border: `1px solid ${active ? "rgba(47,124,255,0.9)" : "rgba(148,163,184,0.25)"}`,
+                            background: active ? "rgba(47,124,255,0.3)" : "rgba(15,23,42,0.5)",
+                          }}
+                        >
+                          {new Date(2000, month, 1).toLocaleDateString("en-US", { month: "short" })}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => navigateCalendar(-1)}
+              style={{
+                ...secondaryButtonStyle,
+                margin: 0,
+                width: isMobile ? "100%" : undefined,
+              }}
+              aria-label={`Previous ${view}`}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateCalendar(1)}
+              style={{
+                ...secondaryButtonStyle,
+                margin: 0,
+                width: isMobile ? "100%" : undefined,
+              }}
+              aria-label={`Next ${view}`}
+            >
+              Next
+            </button>
+            {actions}
+          </div>
+        </div>
+
+        {beforeCalendar}
+        {items.length === 0 && <p>{emptyMessage}</p>}
+        {isMobile && view === "month" && visibleCalendarDates.length === 0 ? (
+          <p style={{ color: "#94a3b8" }}>No entries this month.</p>
+        ) : (
+          <div
+            style={
+              isMobile
+                ? { display: "flex", flexDirection: "column", gap: 8 }
+                : {
+                    display: "grid",
+                    gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+                    gap: 10,
+                  }
+            }
+          >
+            {visibleCalendarDates.map((calendarDate) => {
+                const dateKey = formatDateKey(calendarDate);
+                const dayItems = itemsByDate[dateKey] || [];
+                const isToday = dateKey === formatDateKey(new Date());
+                const isCurrentMonth =
+                  calendarDate.getMonth() === date.getMonth() &&
+                  calendarDate.getFullYear() === date.getFullYear();
+
+                return (
+                  <div
+                    key={dateKey}
+                    style={{
+                      minHeight: view === "month" ? 120 : 180,
+                      padding: 10,
+                      borderRadius: 14,
+                      border: `1px solid ${isToday ? "rgba(47,124,255,0.75)" : "rgba(148,163,184,0.18)"}`,
+                      background: isToday
+                        ? "rgba(47,124,255,0.1)"
+                        : "rgba(15,23,42,0.4)",
+                      opacity: view === "month" && !isCurrentMonth ? 0.55 : 1,
+                      ...(isMobile
+                        ? {
+                            minHeight: 0,
+                            display: "grid",
+                            gridTemplateColumns: "76px minmax(0, 1fr)",
+                            alignItems: "start",
+                            gap: 10,
+                          }
+                        : {}),
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: isMobile ? "column" : "row",
+                        alignItems: isMobile ? "flex-start" : "center",
+                        justifyContent: isMobile ? undefined : "space-between",
+                        gap: isMobile ? 2 : 6,
+                        marginBottom: isMobile ? 0 : 10,
+                      }}
+                    >
+                      <strong>
+                        {calendarDate.toLocaleDateString("en-US", {
+                          weekday: "short",
+                        })}
+                      </strong>
+                      <span style={{ color: "#cbd5e1", fontSize: 13 }}>
+                        {view === "month"
+                          ? calendarDate.getDate()
+                          : calendarDate.toLocaleDateString("en-US", {
+                              month: "numeric",
+                              day: "numeric",
+                            })}
+                      </span>
+                    </div>
+                    <div>
+                      {dayItems.length === 0 ? (
+                        <p style={{ margin: 0, color: "#94a3b8", fontSize: 12 }}>
+                          {emptyDayLabel}
+                        </p>
+                      ) : (
+                        dayItems.map(renderItem)
+                      )}
+                    </div>
+                  </div>
+                );
+            })}
+          </div>
+        )}
+        {afterCalendar}
+        <>
+          {undatedItems.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <h3 style={{ margin: "0 0 10px" }}>No date</h3>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: isMobile
+                    ? "1fr"
+                    : "repeat(2, minmax(0, 1fr))",
+                  gap: 10,
+                }}
+              >
+                {undatedItems.map(renderItem)}
+              </div>
             </div>
           )}
         </>
-      )}
-    </section>
+      </section>
+    );
+  };
+
+  const athleteReadinessLogs = readinessLogs.filter(
+    (log) => user?.uid && log.userId === user.uid
+  );
+
+  const renderReadinessLogItem = (log) => {
+    const color = getReadinessColor(log.readinessRatio);
+
+    return (
+      <div
+        key={log.id}
+        style={{
+          border: `1px solid ${color}`,
+          borderRadius: 10,
+          padding: 9,
+          marginBottom: 8,
+          background: "rgba(15, 23, 42, 0.7)",
+          wordBreak: "break-word",
+          color: "#f8fafc",
+          fontSize: 12,
+        }}
+      >
+        <p style={{ margin: "0 0 6px" }}>
+          <span style={{ ...badgeStyle(color), padding: "4px 7px", fontSize: 11 }}>
+            {getReadinessStatus(log.readinessRatio)}
+          </span>
+        </p>
+        <p style={{ margin: "0 0 6px", fontWeight: 700 }}>
+          {log.sessionType || "Session"}
+        </p>
+        <p style={{ margin: "0 0 6px", color: "#cbd5e1" }}>
+          Readiness: {log.readinessRatio ?? "N/A"} · RPE {log.actualRPE || "N/A"}
+        </p>
+        <details>
+          <summary style={{ cursor: "pointer", color: "#93c5fd" }}>
+            Log details
+          </summary>
+          <div style={{ paddingTop: 6 }}>
+            <p>
+              Date: {formatDateDisplay(log.sessionDate || getCalendarItemDateKey(log))}
+            </p>
+            <p>Group: {log.sessionGroup || "All"}</p>
+            <p>Planned RPE: {log.plannedRPE || "N/A"}</p>
+            <p>Actual RPE: {log.actualRPE || "N/A"}</p>
+            <p>Should Train Today: {log.shouldTrainToday || "N/A"}</p>
+            <p>Yesterday&apos;s Workout Completed: {log.workoutCompleted || "N/A"}</p>
+            <p style={{ whiteSpace: "pre-wrap" }}>
+              Athlete Notes: {log.notes || "None"}
+            </p>
+            <p style={{ whiteSpace: "pre-wrap" }}>
+              <strong>Coach Note:</strong> {log.coachNote || "No coach note yet."}
+            </p>
+            {log.coachNoteUpdatedAt && (
+              <p style={{ color: "#94a3b8" }}>
+                Coach Message Sent: {formatTimestamp(log.coachNoteUpdatedAt)}
+              </p>
+            )}
+          </div>
+        </details>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+          <button
+            onClick={() => handleEditLog(log)}
+            style={{ ...editButtonStyle, margin: 0, padding: "6px 9px", fontSize: 12 }}
+          >
+            Edit Log
+          </button>
+          <button
+            onClick={() => handleDeleteLog(log.id)}
+            style={{ ...deleteButtonStyle, margin: 0, padding: "6px 9px", fontSize: 12 }}
+          >
+            Delete Log
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSplitDayItem = (workout) => {
+    const selected = selectedSplitId === workout.id;
+
+    return (
+      <button
+        key={workout.id}
+        type="button"
+        onClick={() => setSelectedSplitId(selected ? null : workout.id)}
+        style={{
+          display: "block",
+          width: "100%",
+          textAlign: "left",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          color: "#f8fafc",
+          padding: 8,
+          marginBottom: 6,
+          borderRadius: 10,
+          fontSize: 12,
+          border: "2px dashed rgba(47,124,255,0.8)",
+          background: selected ? "rgba(47,124,255,0.25)" : "rgba(15,23,42,0.7)",
+        }}
+      >
+        <strong>Workout</strong>
+        <span
+          style={{
+            display: "block",
+            marginTop: 4,
+            color: "#cbd5e1",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {workout.comment || workout.notes || workout.workoutName || ""}
+        </span>
+      </button>
+    );
+  };
+
+  const renderWorkoutSplits = () => {
+    const fieldStyle = { ...inputStyle, marginTop: 0, marginBottom: 0, width: "100%", boxSizing: "border-box" };
+    const selectedWorkout = workoutSplits.find((w) => w.id === selectedSplitId);
+
+    return renderCalendar({
+      title: "Workout Splits",
+      items: workoutSplits,
+      view: splitCalendarView,
+      setView: setSplitCalendarView,
+      date: splitCalendarDate,
+      setDate: setSplitCalendarDate,
+      emptyMessage: "No workouts recorded yet.",
+      emptyDayLabel: "No workout",
+      renderItem: renderSplitDayItem,
+      actions: !splitFormOpen && (
+        <button
+          type="button"
+          onClick={handleStartAddWorkout}
+          style={{ ...buttonStyle, margin: 0, width: isMobile ? "100%" : undefined }}
+        >
+          + Add Workout
+        </button>
+      ),
+      beforeCalendar: splitFormOpen ? (
+          <form
+            onSubmit={handleSaveWorkoutSplit}
+            style={{
+              border: "1px solid rgba(148, 163, 184, 0.18)",
+              borderRadius: 14,
+              padding: isMobile ? 12 : 16,
+              marginBottom: 16,
+              background: "rgba(255,255,255,0.04)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px" }}>
+              {editingSplitId ? "Edit Workout Splits" : "New Workout Splits"}
+            </h3>
+
+            <input
+              style={{ ...fieldStyle, marginBottom: 10 }}
+              type="date"
+              value={splitDate}
+              onChange={(e) => setSplitDate(e.target.value)}
+              aria-label="Workout date"
+              required
+            />
+
+            <textarea
+              style={{ ...fieldStyle, minHeight: 140, marginBottom: 12 }}
+              placeholder="Write about your workout and your splits (e.g. 4 x 400m: 62, 61, 61, 60 — felt strong). This is shared with your coach."
+              value={splitComment}
+              onChange={(e) => setSplitComment(e.target.value)}
+              required
+            />
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="submit" style={{ ...buttonStyle, marginTop: 0, marginRight: 0 }}>
+                {editingSplitId ? "Update Comment" : "Save & Share with Coach"}
+              </button>
+              <button
+                type="button"
+                onClick={resetSplitForm}
+                style={{ ...secondaryButtonStyle, marginTop: 0, marginRight: 0 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+      ) : null,
+      afterCalendar: selectedWorkout ? (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
+            <h3 style={{ margin: 0 }}>{formatDateDisplay(selectedWorkout.workoutDate)}</h3>
+            <button
+              type="button"
+              onClick={() => setSelectedSplitId(null)}
+              style={{ ...secondaryButtonStyle, margin: 0, width: undefined }}
+            >
+              Close
+            </button>
+          </div>
+          {(() => {
+            const workout = selectedWorkout;
+            return (
+            <div
+              key={workout.id}
+              style={{
+                border: "1px solid rgba(148, 163, 184, 0.18)",
+                borderRadius: 14,
+                padding: isMobile ? 12 : 16,
+                marginBottom: 12,
+                background: "rgba(15, 23, 42, 0.7)",
+              }}
+            >
+              <p style={{ margin: "0 0 8px", color: "#94a3b8", fontSize: 13 }}>
+                {formatDateDisplay(workout.workoutDate)}
+                {workout.workoutName ? ` • ${workout.workoutName}` : ""}
+              </p>
+              <p style={{ margin: "0 0 10px", color: "#f8fafc", whiteSpace: "pre-wrap", fontSize: 14 }}>
+                {workout.comment || workout.notes}
+              </p>
+
+              {(workout.splits || []).length > 0 && (
+                <div style={{ overflowX: "auto", marginBottom: 10 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: "#f8fafc" }}>
+                    <thead>
+                      <tr style={{ color: "#94a3b8", textAlign: "left" }}>
+                        <th style={{ padding: "6px 8px" }}>Rep</th>
+                        <th style={{ padding: "6px 8px" }}>Distance</th>
+                        <th style={{ padding: "6px 8px" }}>Split</th>
+                        <th style={{ padding: "6px 8px" }}>Recovery</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {workout.splits.map((row, index) => (
+                        <tr key={index} style={{ borderTop: "1px solid rgba(148, 163, 184, 0.18)" }}>
+                          <td style={{ padding: "6px 8px" }}>{row.rep || "-"}</td>
+                          <td style={{ padding: "6px 8px" }}>{row.distance || "-"}</td>
+                          <td style={{ padding: "6px 8px" }}>{row.splitTime || "-"}</td>
+                          <td style={{ padding: "6px 8px" }}>{row.recoveryTime || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => handleEditWorkoutSplit(workout)}
+                  style={{ ...secondaryButtonStyle, marginTop: 0, marginRight: 0 }}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteWorkoutSplit(workout.id)}
+                  style={{ ...secondaryButtonStyle, marginTop: 0, marginRight: 0, color: "#f87171", borderColor: "#f87171" }}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+            );
+          })()}
+        </div>
+      ) : null,
+    });
+  };
+
+  const renderSessionTab = () => (
+    <>
+      {renderCalendar({
+        title: "Workout Readiness",
+        items: athleteReadinessLogs,
+        view: workoutCalendarView,
+        setView: setWorkoutCalendarView,
+        date: workoutCalendarDate,
+        setDate: setWorkoutCalendarDate,
+        emptyMessage: "No readiness logs yet.",
+        emptyDayLabel: "No readiness logged",
+        renderItem: renderReadinessLogItem,
+      })}
+      {renderWorkoutSplits()}
+    </>
   );
 
   const renderLogTab = () => (
@@ -1494,69 +2275,18 @@ export default function AthleteDashboard() {
     </section>
   );
 
-  const renderHistoryTab = () => (
-    <section style={cardStyle}>
-      <h2 style={{ marginTop: 0 }}>History</h2>
-
-      {readinessLogs.length === 0 ? (
-        <p>No readiness logs yet.</p>
-      ) : (
-        readinessLogs.map((log) => {
-          const color = getReadinessColor(log.readinessRatio);
-
-          return (
-            <div
-              key={log.id}
-              style={{
-                border: `2px solid ${color}`,
-                borderRadius: 12,
-                padding: 12,
-                marginBottom: 12,
-                background: "rgba(15, 23, 42, 0.7)",
-                wordBreak: "break-word",
-              }}
-            >
-              <p>
-                <span style={badgeStyle(color)}>{getReadinessStatus(log.readinessRatio)}</span>
-              </p>
-
-              <p>
-                <strong>{log.sessionType || "Session"}</strong>
-              </p>
-              <p>Date: {log.sessionDate || "N/A"}</p>
-              <p>Group: {log.sessionGroup || "All"}</p>
-              <p>Planned RPE: {log.plannedRPE || "N/A"}</p>
-              <p>Actual RPE: {log.actualRPE || "N/A"}</p>
-              <p>Should Train Today: {log.shouldTrainToday || "N/A"}</p>
-              <p>Yesterday's Workout Completed: {log.workoutCompleted || "N/A"}</p>
-
-              <p style={{ whiteSpace: "pre-wrap" }}>
-                Athlete Notes: {log.notes || "None"}
-              </p>
-
-              <p style={{ whiteSpace: "pre-wrap" }}>
-                <strong>Coach Note:</strong> {log.coachNote || "No coach note yet."}
-              </p>
-
-              {log.coachNoteUpdatedAt && (
-                <p style={{ color: "#94a3b8", fontSize: 13 }}>
-                  Coach Message Sent: {formatTimestamp(log.coachNoteUpdatedAt)}
-                </p>
-              )}
-
-              <button onClick={() => handleEditLog(log)} style={editButtonStyle}>
-                Edit Log
-              </button>
-
-              <button onClick={() => handleDeleteLog(log.id)} style={deleteButtonStyle}>
-                Delete Log
-              </button>
-            </div>
-          );
-        })
-      )}
-    </section>
-  );
+  const renderHistoryTab = () =>
+    renderCalendar({
+      title: "History",
+      items: athleteReadinessLogs,
+      view: historyCalendarView,
+      setView: setHistoryCalendarView,
+      date: historyCalendarDate,
+      setDate: setHistoryCalendarDate,
+      emptyMessage: "No readiness logs yet.",
+      emptyDayLabel: "No logs",
+      renderItem: renderReadinessLogItem,
+    });
 
   if (loading) {
     return <p style={{ padding: 20 }}>Loading...</p>;
@@ -1594,7 +2324,7 @@ export default function AthleteDashboard() {
         </div>
       )}
 
-      <div style={{ maxWidth: 920, margin: "0 auto", width: "100%", padding: isMobile ? "6px 12px 4px" : "0 18px 6px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: "none", margin: 0, width: "100%", padding: isMobile ? "6px 12px 4px" : "0 18px 6px", boxSizing: "border-box" }}>
         <div
           style={{
             display: "flex",
@@ -1605,7 +2335,7 @@ export default function AthleteDashboard() {
             marginBottom: 0,
           }}
         >
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative" }} data-dropdown="nav">
             <button
               type="button"
               onClick={() => setAthleteMenuOpen((current) => !current)}
@@ -1757,7 +2487,7 @@ export default function AthleteDashboard() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 920, margin: "0 auto", width: "100%", padding: isMobile ? "4px 10px 12px" : "4px 18px 18px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: "none", margin: 0, width: "100%", padding: isMobile ? "4px 10px 12px" : "4px 18px 18px", boxSizing: "border-box" }}>
 
         {activeTab === "overview" && renderOverview()}
         {activeTab === "session" && renderSessionTab()}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import styles from "../dashboard.module.css";
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../lib/firebase";
@@ -55,6 +55,71 @@ const getLogDateValue = (log) => {
   }
 
   return null;
+};
+
+const formatDate = (value) => {
+  if (!value) return "N/A";
+
+  if (typeof value === "string") {
+    const dateOnlyMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnlyMatch) {
+      return `${dateOnlyMatch[2]}/${dateOnlyMatch[3]}/${dateOnlyMatch[1]}`;
+    }
+  }
+
+  const date = value.toDate
+    ? value.toDate()
+    : value instanceof Date
+    ? value
+    : new Date(value);
+
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  return date.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+};
+
+const formatDateKey = (date) =>
+  [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+
+const getSundayStart = (date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate() - date.getDay());
+
+const getISOWeekValue = (date) => {
+  const thursday = new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+  );
+  const dayOfWeek = thursday.getUTCDay() || 7;
+  thursday.setUTCDate(thursday.getUTCDate() + 4 - dayOfWeek);
+  const yearStart = Date.UTC(thursday.getUTCFullYear(), 0, 1);
+  const weekNumber = Math.ceil(
+    ((thursday.getTime() - yearStart) / 86400000 + 1) / 7
+  );
+
+  return `${thursday.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+};
+
+const getMondayFromISOWeek = (value) => {
+  const match = value.match(/^(\d{4})-W(\d{2})$/);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  const januaryFourth = new Date(year, 0, 4);
+  const monday = new Date(year, 0, 4);
+  monday.setDate(
+    monday.getDate() - ((januaryFourth.getDay() + 6) % 7) + (week - 1) * 7
+  );
+
+  if (getISOWeekValue(monday) !== value) return null;
+  return monday;
 };
 
 const getSessionDuration = (log) => {
@@ -214,6 +279,13 @@ const enhanceLogsWithCompoundedReadiness = (logs) => {
 export default function CoachDashboard() {
   const router = useRouter();
   const [isMobile, setIsMobile] = useState(false);
+  const [chartWidth, setChartWidth] = useState(0);
+  const chartContainerRef = useCallback((node) => {
+    if (!node) return;
+    setChartWidth(node.clientWidth);
+    const observer = new ResizeObserver(() => setChartWidth(node.clientWidth));
+    observer.observe(node);
+  }, []);
 
   const [user, setUser] = useState(null);
   const [coachProfile, setCoachProfile] = useState(null);
@@ -222,8 +294,12 @@ export default function CoachDashboard() {
   const [statusMessage, setStatusMessage] = useState("");
 
   const [activeTab, setActiveTab] = useState("overview");
+  const [planningDate, setPlanningDate] = useState(() => new Date());
+  const [planningView, setPlanningView] = useState("week");
   const [coachMenuOpen, setCoachMenuOpen] = useState(false);
   const [mailboxOpen, setMailboxOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [workoutSplits, setWorkoutSplits] = useState([]);
   const [groupMessageOpen, setGroupMessageOpen] = useState(false);
   const [selectedGroupForMessage, setSelectedGroupForMessage] = useState("");
   const [groupMessage, setGroupMessage] = useState("");
@@ -240,8 +316,24 @@ export default function CoachDashboard() {
   const [coachNotes, setCoachNotes] = useState({});
 
   const [filterName, setFilterName] = useState("");
-  const [filterEventGroup, setFilterEventGroup] = useState("All");
-  const [filterAlertStatus, setFilterAlertStatus] = useState("All");
+  const [pendingAthlete, setPendingAthlete] = useState(null);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+
+  useEffect(() => {
+    const handleOutside = (event) => {
+      if (!event.target.closest('[data-dropdown="nav"]')) setCoachMenuOpen(false);
+      if (!event.target.closest('[data-dropdown="date"]')) setDatePickerOpen(false);
+    };
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("touchstart", handleOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("touchstart", handleOutside);
+    };
+  }, []);
+  const [logCalendarView, setLogCalendarView] = useState("month");
+  const [selectedDayKey, setSelectedDayKey] = useState(null);
+  const [logCalendarMonth, setLogCalendarMonth] = useState(() => new Date());
   const [showMissedWorkoutList, setShowMissedWorkoutList] = useState(false);
 
   const [seenMailboxIds, setSeenMailboxIds] = useState(() => {
@@ -277,6 +369,7 @@ export default function CoachDashboard() {
   useEffect(() => {
     let unsubscribeSessions = null;
     let unsubscribeLogs = null;
+    let unsubscribeSplits = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
       if (!currentUser) {
@@ -334,8 +427,29 @@ export default function CoachDashboard() {
         setCoachProfile(data);
         setTeamCode(profileTeamCode);
 
+        const subscribeSplits = (code) => {
+          if (!code || unsubscribeSplits) return;
+
+          unsubscribeSplits = onSnapshot(
+            query(collection(db, "workout_splits"), where("teamCode", "==", code)),
+            (snapshot) => {
+              const splitsData = snapshot.docs.map((d) => ({
+                id: d.id,
+                ...d.data(),
+              }));
+
+              setWorkoutSplits(
+                splitsData.sort((a, b) =>
+                  String(b.workoutDate || "").localeCompare(String(a.workoutDate || ""))
+                )
+              );
+            }
+          );
+        };
+
         const loadTeamData = (code) => {
           if (!code) return;
+          subscribeSplits(code);
 
           const sessionsQuery = query(
             collection(db, "planned_sessions"),
@@ -396,6 +510,7 @@ export default function CoachDashboard() {
 
             if (derivedTeamCode) {
               setTeamCode(derivedTeamCode);
+              subscribeSplits(derivedTeamCode);
 
               if (!unsubscribeLogs) {
                 const logsQuery = query(
@@ -441,6 +556,10 @@ export default function CoachDashboard() {
 
       if (unsubscribeLogs) {
         unsubscribeLogs();
+      }
+
+      if (unsubscribeSplits) {
+        unsubscribeSplits();
       }
     };
   }, [router]);
@@ -758,6 +877,7 @@ export default function CoachDashboard() {
     const value = Number(ratio);
 
     if (value === 0) return "Not Enough Data";
+    if (value < 0.8) return "Low Strain";
     if (value <= 1.3) return "Ready";
     if (value <= 1.5) return "Caution";
     return "Not Ready";
@@ -767,30 +887,50 @@ export default function CoachDashboard() {
     const value = Number(ratio);
 
     if (shouldTrainToday === "No") {
-      return "Coach Suggestion: Check in before training. Consider recovery or a modified session.";
+      return "Recommendation: Check in before training. Consider recovery or a modified session.";
     }
 
     if (shouldTrainToday === "Unsure") {
-      return "Coach Suggestion: Talk with the athlete before the workout and consider reducing load.";
+      return "Recommendation: Talk with the athlete before the workout and consider reducing load.";
     }
 
     if (value < 0.8) {
-      return "Coach Suggestion: Low strain. Proceed as planned unless athlete feedback says otherwise.";
+      return "Recommendation: Low strain. Proceed as planned unless athlete feedback says otherwise.";
     }
 
     if (value >= 0.8 && value <= 1.3) {
-      return "Coach Suggestion: Ready. Proceed with the planned session.";
+      return "Recommendation: Ready. Proceed with the planned session.";
     }
 
     if (value > 1.3 && value <= 1.5) {
-      return "Coach Suggestion: Caution. Consider reducing volume or intensity.";
+      return "Recommendation: Caution. Consider reducing volume or intensity.";
     }
 
     if (value > 1.5) {
-      return "Coach Suggestion: High risk. Recommend recovery, reduced load, or modified training.";
+      return "Recommendation: High risk. Recommend recovery, reduced load, or modified training.";
     }
 
-    return "Coach Suggestion: Not enough data. Use athlete feedback.";
+    return "Recommendation: Not enough data. Use athlete feedback.";
+  };
+
+  const getDailyReadinessDisplay = (score) => {
+    const value = Number(score);
+
+    if (score === null || score === undefined || score === "" || !Number.isFinite(value)) {
+      return "N/A";
+    }
+
+    const category =
+      value >= 85 ? "High" : value >= 70 ? "Good" : value >= 50 ? "Moderate" : "Low";
+
+    return `${Math.round(value)}/100 - ${category}`;
+  };
+
+  const getTrainingStatusDisplay = (shouldTrainToday) => {
+    if (shouldTrainToday === "Yes" || shouldTrainToday === true) return "Proceed";
+    if (shouldTrainToday === "Unsure") return "Modify";
+    if (shouldTrainToday === "No" || shouldTrainToday === false) return "Recovery";
+    return "N/A";
   };
 
   // --- BEGIN: Trend helpers ---
@@ -834,12 +974,10 @@ export default function CoachDashboard() {
 
     const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
 
-    return date.toLocaleString([], {
-      month: "short",
-      day: "numeric",
+    return `${formatDate(date)}, ${date.toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
-    });
+    })}`;
   };
 
   const getAverageForDays = (logs, days) => {
@@ -862,55 +1000,39 @@ export default function CoachDashboard() {
     return Number((total / recentLogs.length).toFixed(2));
   };
 
-  const getAthleteAverages = () => {
+  const getGroupAverages = () => {
     const grouped = {};
 
     athleteLogs.forEach((log) => {
-      const name = log.name || "Unnamed Athlete";
-
-      if (!grouped[name]) {
-        grouped[name] = [];
-      }
-
-      grouped[name].push(log);
+      const group = normalizeEventGroupLabel(log.eventGroup) || "Unassigned";
+      if (!grouped[group]) grouped[group] = [];
+      grouped[group].push(log);
     });
 
-    return Object.keys(grouped).map((name) => {
-      const logs = grouped[name];
+    return Object.keys(grouped)
+      .sort()
+      .map((eventGroup) => {
+        const logs = grouped[eventGroup];
+        const threeDayAvg = getAverageForDays(logs, 3);
+        const sevenDayAvg = getAverageForDays(logs, 7);
+        const fourteenDayAvg = getAverageForDays(logs, 14);
 
-      const threeDayAvg = getAverageForDays(logs, 3);
-      const sevenDayAvg = getAverageForDays(logs, 7);
-      const fourteenDayAvg = getAverageForDays(logs, 14);
-
-      let trend = "Not enough data";
-
-      if (threeDayAvg !== null && fourteenDayAvg !== null) {
-        if (threeDayAvg > fourteenDayAvg + 0.15) {
-          trend = "Trending higher strain";
-        } else if (threeDayAvg < fourteenDayAvg - 0.15) {
-          trend = "Trending lower strain";
-        } else {
-          trend = "Stable";
+        let trend = "Not enough data";
+        if (threeDayAvg !== null && fourteenDayAvg !== null) {
+          if (threeDayAvg > fourteenDayAvg + 0.15) trend = "Trending higher strain";
+          else if (threeDayAvg < fourteenDayAvg - 0.15) trend = "Trending lower strain";
+          else trend = "Stable";
         }
-      }
 
-      return {
-        name,
-        eventGroup: logs[0]?.eventGroup || "N/A",
-        threeDayAvg,
-        sevenDayAvg,
-        fourteenDayAvg,
-        trend,
-      };
-    });
-  };
-
-  const getUniqueEventGroups = () => {
-    const groups = athleteLogs
-      .map((log) => normalizeEventGroupLabel(log.eventGroup))
-      .filter((group) => group && group.trim() !== "" && group !== "Unassigned");
-
-    return ["All", ...Array.from(new Set(groups))];
+        return {
+          eventGroup,
+          athleteCount: new Set(logs.map((log) => log.name || "Unnamed Athlete")).size,
+          threeDayAvg,
+          sevenDayAvg,
+          fourteenDayAvg,
+          trend,
+        };
+      });
   };
 
   const getAtRiskAthletes = () => {
@@ -955,7 +1077,7 @@ export default function CoachDashboard() {
       return (
         <span
           key={`${log.id || index}-trend-dot`}
-          title={`${log.sessionDate || "Log"}: ${log.readinessRatio || "N/A"}`}
+          title={`${log.sessionDate ? formatDate(log.sessionDate) : "Log"}: ${log.readinessRatio || "N/A"}`}
           style={{
             display: "inline-block",
             width: 9,
@@ -1052,33 +1174,39 @@ export default function CoachDashboard() {
     "Multi",
   ];
 
-    const applyFilters = (logs) => {
-    return logs.filter((log) => {
-      const nameMatch = String(log.name || "")
-        .toLowerCase()
-        .includes(filterName.toLowerCase());
+  const getItemDayKey = (item) => {
+    const value = item.sessionDate || item.workoutDate || "";
 
-      const eventGroupMatch =
-        filterEventGroup === "All" || log.eventGroup === filterEventGroup;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
 
-      let alertMatch = true;
-
-      if (filterAlertStatus === "Alerts Only") {
-        alertMatch = isAlertLog(log);
-      }
-
-      if (filterAlertStatus === "No Alerts") {
-        alertMatch = !isAlertLog(log);
-      }
-
-      return nameMatch && eventGroupMatch && alertMatch;
-    });
+    const date = getLogDate(item);
+    return date && !Number.isNaN(date.getTime()) ? formatDateKey(date) : null;
   };
+
+  const getItemWeekKey = (item) => {
+    let date = null;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(item.sessionDate || item.workoutDate || "")) {
+      const [year, month, day] = (item.sessionDate || item.workoutDate).split("-").map(Number);
+      date = new Date(year, month - 1, day);
+    } else {
+      date = getLogDate(item);
+    }
+
+    return date && !Number.isNaN(date.getTime())
+      ? formatDateKey(getSundayStart(date))
+      : null;
+  };
+
+  const applyFilters = (logs) =>
+    logs.filter((log) => {
+      const nameMatch = !filterName || log.name === filterName;
+      return nameMatch;
+    });
 
   const handleClearFilters = () => {
     setFilterName("");
-    setFilterEventGroup("All");
-    setFilterAlertStatus("All");
+    setPendingAthlete(null);
   };
 
   const scrollToLogsSection = () => {
@@ -1095,15 +1223,10 @@ export default function CoachDashboard() {
     router.push("/");
   };
 
-  const openLogsWithFilters = ({
-    name = "",
-    eventGroup = "All",
-    alertStatus = "All",
-  } = {}) => {
+  const openLogsWithFilters = ({ name = "" } = {}) => {
     setActiveTab("logs");
     setFilterName(name);
-    setFilterEventGroup(eventGroup);
-    setFilterAlertStatus(alertStatus);
+    setPendingAthlete(null);
     requestAnimationFrame(scrollToLogsSection);
   };
 
@@ -1128,12 +1251,60 @@ export default function CoachDashboard() {
     fontSize: 13,
   });
 
-  const athleteAverages = getAthleteAverages();
+  const groupAverages = getGroupAverages();
   const filteredAthleteLogs = applyFilters(athleteLogs);
-  const eventGroupOptions = getUniqueEventGroups();
+  const weekOptions = Array.from(
+    new Set(athleteLogs.map(getItemWeekKey).filter(Boolean))
+  ).sort((a, b) => b.localeCompare(a));
   const atRiskAthletes = getAtRiskAthletes();
   const dailySummary = getDailySummary();
   const todaysPlannedSessions = getTodaysPlannedSessions();
+  const planningWeekStart = getSundayStart(planningDate);
+  const planningWeekDates = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(planningWeekStart);
+    date.setDate(planningWeekStart.getDate() + index);
+    return date;
+  });
+  const planningMonthStart = new Date(
+    planningDate.getFullYear(),
+    planningDate.getMonth(),
+    1
+  );
+  const planningCalendarStart = getSundayStart(planningMonthStart);
+  const planningMonthDayCount = new Date(
+    planningDate.getFullYear(),
+    planningDate.getMonth() + 1,
+    0
+  ).getDate();
+  const planningCalendarDayCount =
+    Math.ceil(
+      (planningMonthDayCount +
+        (planningMonthStart.getDay())) /
+        7
+    ) * 7;
+  const planningMonthDates = Array.from(
+    { length: planningCalendarDayCount },
+    (_, index) => {
+      const date = new Date(planningCalendarStart);
+      date.setDate(planningCalendarStart.getDate() + index);
+      return date;
+    }
+  );
+  const planningCalendarDates =
+    planningView === "month" ? planningMonthDates : planningWeekDates;
+  const planningWeekSessions = plannedSessions.reduce((sessionsByDate, session) => {
+    if (!session.sessionDate) return sessionsByDate;
+    if (!sessionsByDate[session.sessionDate]) sessionsByDate[session.sessionDate] = [];
+    sessionsByDate[session.sessionDate].push(session);
+    return sessionsByDate;
+  }, {});
+  const planningCalendarLabel =
+    planningView === "month"
+      ? planningDate.toLocaleDateString("en-US", {
+          month: "long",
+          year: "numeric",
+        })
+      : `${formatDate(planningWeekDates[0])} - ${formatDate(planningWeekDates[6])}`;
   const getMissedWorkoutAthletesThisWeek = () => {
     const now = new Date();
     const weekAgo = new Date();
@@ -1304,146 +1475,45 @@ export default function CoachDashboard() {
 
   const coachTrendNotifications = getCoachTrendNotifications();
 
-  const getGroupScatterData = () => {
-    const grouped = {};
-
-    athleteLogs.forEach((log) => {
-      const group = normalizeEventGroupLabel(log.eventGroup || "Unassigned");
-      if (!grouped[group]) grouped[group] = [];
-      grouped[group].push(log);
-    });
-
-    return Object.entries(grouped)
-      .sort(([groupA], [groupB]) => groupA.localeCompare(groupB))
-      .map(([group, logs], index) => {
-        const latest = sortLogsNewestFirst(logs).slice(0, 12);
-        const valid = latest.filter(
-          (log) =>
-            Number.isFinite(Number(log.stress)) &&
-            Number.isFinite(Number(log.sleepQuality)) &&
-            Number.isFinite(Number(log.readinessRatio))
-        );
-
-        if (valid.length === 0) return null;
-
-        const avgStress =
-          valid.reduce((sum, log) => sum + Number(log.stress || 0), 0) / valid.length;
-        const avgSleep =
-          valid.reduce((sum, log) => sum + Number(log.sleepQuality || 0), 0) / valid.length;
-        const avgReadiness =
-          valid.reduce((sum, log) => sum + Number(log.readinessRatio || 0), 0) / valid.length;
-
-        return {
-          label: normalizeEventGroupLabel(group),
-          x: Number(avgStress.toFixed(1)),
-          y: Number(avgSleep.toFixed(1)),
-          readiness: Number(avgReadiness.toFixed(2)),
-          color: getGroupColor(index),
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.readiness - a.readiness);
-  };
-
-  const renderScatterPlot = ({ data, title, xLabel, yLabel, fallbackMessage }) => {
-    if (!data || data.length === 0) {
-      return (
-        <div style={{ padding: 12, color: "#9ca8b8" }}>
-          {fallbackMessage}
-        </div>
-      );
-    }
-
-    const isCompact = isMobile;
-    const width = isCompact ? 560 : 680;
-    const height = isCompact ? 240 : 280;
-    const padding = isCompact ? { top: 20, right: 16, bottom: 44, left: 62 } : { top: 26, right: 20, bottom: 54, left: 74 };
-    const xValues = data.map((point) => point.x);
-    const yValues = data.map((point) => point.y);
-    const xMin = Math.min(0, ...xValues);
-    const xMax = Math.max(10, ...xValues);
-    const yMin = Math.min(0, ...yValues);
-    const yMax = Math.max(10, ...yValues);
-    const xRange = xMax - xMin || 1;
-    const yRange = yMax - yMin || 1;
-
-    const scaleX = (value) =>
-      padding.left + ((value - xMin) / xRange) * (width - padding.left - padding.right);
-    const scaleY = (value) =>
-      height - padding.bottom - ((value - yMin) / yRange) * (height - padding.top - padding.bottom);
-
-    return (
-      <div style={{ marginTop: 12 }}>
-        <div style={{ background: "rgba(15, 23, 42, 0.35)", borderRadius: 14, padding: 8 }}>
-          <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", maxHeight: 300 }}>
-            {[0, 2.5, 5, 7.5, 10].map((tick) => {
-              const x = scaleX(tick);
-              const y = scaleY(tick);
-              return (
-                <g key={`axis-${tick}`}>
-                  <line x1={x} y1={padding.top} x2={x} y2={height - padding.bottom} stroke="rgba(148,163,184,0.18)" strokeDasharray="4 4" />
-                  <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} stroke="rgba(148,163,184,0.18)" strokeDasharray="4 4" />
-                  <text x={x} y={height - 22} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 9 : 10}>{tick.toFixed(1)}</text>
-                  <text x={padding.left - 12} y={y + 4} textAnchor="end" fill="#9ca8b8" fontSize={isCompact ? 9 : 10}>{tick.toFixed(1)}</text>
-                </g>
-              );
-            })}
-
-            <line x1={padding.left} y1={height - padding.bottom} x2={width - padding.right} y2={height - padding.bottom} stroke="#94a3b8" />
-            <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#94a3b8" />
-
-            {data.map((point, index) => (
-              <g key={`${point.label}-${index}`}>
-                <circle
-                  cx={scaleX(point.x)}
-                  cy={scaleY(point.y)}
-                  r={7 + point.readiness / 2}
-                  fill={point.color}
-                  opacity={0.9}
-                  stroke="rgba(255,255,255,0.8)"
-                  strokeWidth={1}
-                />
-              </g>
-            ))}
-
-            <text x={width / 2} y={height - 8} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>
-              {xLabel}
-            </text>
-            <text x={28} y={height / 2} transform={`rotate(-90 28 ${height / 2})`} fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>
-              {yLabel}
-            </text>
-          </svg>
-        </div>
-      </div>
-    );
-  };
-
   const getGroupReadinessTrendData = () => {
     const grouped = {};
 
     athleteLogs.forEach((log) => {
+      if (!log.sessionDate || !Number.isFinite(Number(log.readinessRatio || 0))) return;
       const group = normalizeEventGroupLabel(log.eventGroup || "Unassigned");
-      if (!grouped[group]) grouped[group] = [];
-      grouped[group].push(log);
+      if (!grouped[group]) grouped[group] = {};
+      if (!grouped[group][log.sessionDate]) grouped[group][log.sessionDate] = [];
+      grouped[group][log.sessionDate].push(Number(log.readinessRatio || 0));
     });
+
+    const sharedDates = Array.from(
+      new Set(Object.values(grouped).flatMap((byDate) => Object.keys(byDate)))
+    )
+      .sort()
+      .slice(-7);
+
+    const dateLabels = sharedDates.map((date) =>
+      formatDate(date).split("/").slice(0, 2).join("/")
+    );
 
     return Object.entries(grouped)
       .sort(([groupA], [groupB]) => groupA.localeCompare(groupB))
-      .map(([group, logs], index) => {
-        const ordered = sortLogsNewestFirst(logs).slice(0, 8).reverse();
-        const points = ordered
-          .map((log) => ({
-            label: (log.sessionDate || "").slice(5) || "n/a",
-            value: Number(log.readinessRatio || 0),
-          }))
-          .filter((point) => Number.isFinite(point.value));
-
-        return {
-          label: normalizeEventGroupLabel(group),
-          points,
-          color: getGroupColor(index),
-        };
-      })
+      .map(([group, byDate], index) => ({
+        label: normalizeEventGroupLabel(group),
+        color: getGroupColor(index),
+        points: sharedDates
+          .map((date, dateIndex) => {
+            const values = byDate[date];
+            if (!values) return null;
+            return {
+              label: dateLabels[dateIndex],
+              axisIndex: dateIndex,
+              axisTotal: sharedDates.length,
+              value: values.reduce((sum, value) => sum + value, 0) / values.length,
+            };
+          })
+          .filter(Boolean),
+      }))
       .filter((entry) => entry.points.length > 0);
   };
 
@@ -1453,8 +1523,8 @@ export default function CoachDashboard() {
     }
 
     const isCompact = isMobile;
-    const width = isCompact ? 560 : 680;
-    const height = isCompact ? 230 : 270;
+    const width = Math.max(chartWidth - 16, 280) || (isCompact ? 560 : 680);
+    const height = isCompact ? 230 : Math.min(Math.max(Math.round(width * 0.45), 260), 420);
     const padding = isCompact ? { top: 24, right: 24, bottom: 44, left: 62 } : { top: 32, right: 30, bottom: 52, left: 74 };
     const allValues = data.flatMap((series) => series.points.map((point) => point.value));
     const minY = Math.min(0, ...allValues);
@@ -1468,8 +1538,8 @@ export default function CoachDashboard() {
 
     return (
       <div style={{ marginTop: 12 }}>
-        <div style={{ background: "rgba(15, 23, 42, 0.35)", borderRadius: 14, padding: 8 }}>
-          <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", maxHeight: 300 }}>
+        <div ref={chartContainerRef} style={{ background: "rgba(15, 23, 42, 0.35)", borderRadius: 14, padding: 8 }}>
+          <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: "block" }}>
             {[0, 0.5, 1, 1.5, 2].map((tick) => {
               const y = scaleY(tick);
               return (
@@ -1487,7 +1557,7 @@ export default function CoachDashboard() {
               <g key={series.label}>
                 <path
                   d={series.points
-                    .map((point, index) => `${index === 0 ? "M" : "L"}${scaleX(index, series.points.length)},${scaleY(point.value)}`)
+                    .map((point, index) => `${index === 0 ? "M" : "L"}${scaleX(point.axisIndex, point.axisTotal)},${scaleY(point.value)}`)
                     .join(" ")}
                   fill="none"
                   stroke={series.color}
@@ -1497,7 +1567,7 @@ export default function CoachDashboard() {
                 />
                 {series.points.map((point, index) => (
                   <g key={`${series.label}-${point.label}-${index}`}>
-                    <circle cx={scaleX(index, series.points.length)} cy={scaleY(point.value)} r={4.5} fill={series.color} stroke="#fff" strokeWidth="1" />
+                    <circle cx={scaleX(point.axisIndex, point.axisTotal)} cy={scaleY(point.value)} r={4.5} fill={series.color} stroke="#fff" strokeWidth="1" />
                   </g>
                 ))}
               </g>
@@ -1506,11 +1576,17 @@ export default function CoachDashboard() {
             {data.some((series) => series.points.length > 0) && (
               <g>
                 <text x={width / 2} y={height - 28} textAnchor="middle" fill="#9ca8b8" fontSize={isCompact ? 10 : 11}>Recent sessions</text>
-                {data.flatMap((series) =>
-                  series.points.map((point, index) => (
+                {data[0].points.length > 0 &&
+                  Array.from(
+                    new Map(
+                      data.flatMap((series) =>
+                        series.points.map((point) => [point.axisIndex, point])
+                      )
+                    ).values()
+                  ).map((point) => (
                     <text
-                      key={`${series.label}-${point.label}-${index}`}
-                      x={scaleX(index, series.points.length)}
+                      key={`axis-${point.axisIndex}`}
+                      x={scaleX(point.axisIndex, point.axisTotal)}
                       y={height - 10}
                       textAnchor="middle"
                       fill="#9ca8b8"
@@ -1518,8 +1594,7 @@ export default function CoachDashboard() {
                     >
                       {point.label}
                     </text>
-                  ))
-                )}
+                  ))}
               </g>
             )}
 
@@ -1530,7 +1605,6 @@ export default function CoachDashboard() {
     );
   };
 
-  const groupScatterData = getGroupScatterData();
   const groupReadinessTrendData = getGroupReadinessTrendData();
 
   if (loading) return <p style={{ padding: 20 }}>Loading...</p>;
@@ -1551,43 +1625,177 @@ export default function CoachDashboard() {
     </svg>
   );
 
-  const renderFilters = () => (
-    <div className={styles.dashboardCard}>
-      <h3 className={styles.dashboardHeadingReset}>Filters</h3>
+  const renderInfoIcon = () => (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" />
+      <circle cx="12" cy="7.5" r="0.6" fill="currentColor" />
+    </svg>
+  );
 
-      <input
-        className={styles.dashboardInput}
-        placeholder="Search athlete name"
-        value={filterName}
-        onChange={(e) => setFilterName(e.target.value)}
+  const infoSections = [
+    {
+      title: "Readiness Ratio",
+      items: [
+        "Calculated from the athlete's daily survey: Strain ÷ Recovery.",
+        "Strain = average of Stress and Soreness. Recovery = average of Sleep Quality and Mood.",
+        "A lower ratio means the athlete is recovered; a higher ratio means they are carrying more strain.",
+      ],
+    },
+    {
+      title: "Ratio Ranges",
+      items: [
+        "Below 0.8 (blue) – Low Strain: well recovered, proceed as planned.",
+        "0.8 to 1.3 (green) – Ready: proceed with the planned session.",
+        "1.3 to 1.5 (orange) – Caution: consider reducing volume or intensity.",
+        "Above 1.5 (red) – Not Ready / High Risk: recommend recovery, reduced load, or modified training.",
+        "0 – Not Enough Data.",
+      ],
+    },
+    {
+      title: "3, 7 & 14-Day Averages",
+      items: [
+        "The average readiness ratio across all logs in the last 3, 7, or 14 days.",
+        "3-Day shows how the athlete is right now, 7-Day shows the current week, and 14-Day is a longer baseline.",
+        "On the Team Averages tab, each group's average combines every athlete's logs in that event group.",
+      ],
+    },
+    {
+      title: "Trend",
+      items: [
+        "Compares the average ratio of the 3 most recent logs against the 3 logs before them.",
+        "↑ Increasing strain: the ratio rose by more than 0.05. ↓ Recovering: it dropped by more than 0.05. → Stable: little change.",
+        "Needs at least 6 logs, otherwise it shows Not enough data.",
+      ],
+    },
+    {
+      title: "Readiness Stability Model",
+      items: [
+        "Daily Readiness (0-100): a score built from sleep, mood, stress and soreness, adjusted by the gap between planned and actual RPE. 85+ High, 70-84 Good, 50-69 Moderate, below 50 Low.",
+        "Readiness Stability blends today's score with the previous two days so one bad day does not swing the result. Higher is better.",
+        "Its 3, 7, 14 and 21-Day averages show how stable that score has been over time.",
+      ],
+    },
+    {
+      title: "Training Status",
+      items: [
+        "Based on the athlete's answer to \"Should you train today?\"",
+        "Yes = Proceed, Unsure = Modify, No = Recovery.",
+        "An answer of No or Unsure overrides the ratio in the recommendation.",
+      ],
+    },
+    {
+      title: "Dashboard Items",
+      items: [
+        "At-Risk Athletes: athletes whose latest ratio is above 1.3, or who answered No or Unsure to training today.",
+        "Coach Notes Needed: today's logs that do not have a coach note yet.",
+        "Missed / Modified / Completed This Week: the athletes' \"Yesterday's workout completed\" answers (No / Modified / Yes) from logs in the last 7 days.",
+        "Group Readiness Overview: average ratio per event group for the 7 most recent log dates.",
+      ],
+    },
+  ];
+
+  const renderInfoPanel = () => (
+    <>
+      <div
+        className={styles.dashboardModalOverlay}
+        style={{ display: infoOpen ? "block" : "none" }}
+        onClick={() => setInfoOpen(false)}
       />
 
-      <select
-        className={styles.dashboardFilterInput}
-        style={{ width: isMobile ? "100%" : undefined }}
-        value={filterEventGroup}
-        onChange={(e) => setFilterEventGroup(e.target.value)}
+      <aside
+        className={styles.dashboardDrawerPanel}
+        style={{ right: infoOpen ? 0 : isMobile ? "-100%" : -420 }}
       >
-        {eventGroupOptions.map((group) => (
-          <option key={group} value={group}>
-            {group}
-          </option>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 16,
+          }}
+        >
+          <div>
+            <h2 className={styles.dashboardHeadingReset}>Coach Guide</h2>
+            <p className={styles.dashboardSubtitle}>
+              What the numbers on this dashboard mean.
+            </p>
+          </div>
+
+          <button
+            onClick={() => setInfoOpen(false)}
+            className={styles.dashboardCloseButton}
+          >
+            ×
+          </button>
+        </div>
+
+        {infoSections.map((section) => (
+          <div key={section.title} className={styles.smallCard} style={{ marginBottom: 12 }}>
+            <p style={{ margin: "0 0 8px", fontWeight: "bold" }}>{section.title}</p>
+            {section.items.map((item) => (
+              <p
+                key={item}
+                style={{ margin: "0 0 6px", color: "#cbd5e1", fontSize: 13, lineHeight: 1.45 }}
+              >
+                {item}
+              </p>
+            ))}
+          </div>
         ))}
-      </select>
+      </aside>
+    </>
+  );
+
+  const renderFilters = () => (
+    <div className={styles.dashboardCard}>
+      <h3 className={styles.dashboardHeadingReset}>Athlete</h3>
 
       <select
         className={styles.dashboardFilterInput}
         style={{ width: isMobile ? "100%" : undefined }}
-        value={filterAlertStatus}
-        onChange={(e) => setFilterAlertStatus(e.target.value)}
+        value={pendingAthlete ?? filterName}
+        onChange={(e) => setPendingAthlete(e.target.value)}
+        aria-label="Select athlete"
       >
-        <option value="All">All Logs</option>
-        <option value="Alerts Only">Alerts Only</option>
-        <option value="No Alerts">No Alerts</option>
+        <option value="">Select an athlete...</option>
+        {Array.from(new Set(athleteLogs.map((log) => log.name).filter(Boolean)))
+          .sort((a, b) => a.localeCompare(b))
+          .map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
       </select>
 
-      <button onClick={handleClearFilters} className={styles.dashboardButtonSecondary}>
-        Clear Filters
+      <button
+        onClick={() => {
+          setFilterName(pendingAthlete ?? filterName);
+          setPendingAthlete(null);
+          setSelectedDayKey(null);
+        }}
+        style={{
+          width: isMobile ? "100%" : undefined,
+          minHeight: 44,
+          padding: "10px 14px",
+          border: "1px solid rgba(148, 163, 184, 0.28)",
+          borderRadius: 10,
+          background: "rgba(255, 255, 255, 0.05)",
+          color: "#f8fafc",
+          cursor: "pointer",
+          fontWeight: 600,
+        }}
+      >
+        Pick Athlete
       </button>
     </div>
   );
@@ -1618,17 +1826,292 @@ export default function CoachDashboard() {
       </button>
     </div>
   );
+  const renderLogCalendar = () => {
+    let days = [];
+
+    const isMonthView = logCalendarView === "month";
+
+    if (!isMonthView) {
+      const weekStart = getSundayStart(logCalendarMonth);
+      days = Array.from({ length: 7 }, (_, i) => new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i));
+    } else {
+      const first = new Date(logCalendarMonth.getFullYear(), logCalendarMonth.getMonth(), 1);
+      const start = getSundayStart(first);
+      const count = Math.ceil((first.getDay() + new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate()) / 7) * 7;
+      days = Array.from({ length: count }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+    }
+
+    const logsByDay = {};
+    filteredAthleteLogs.forEach((log) => {
+      const key = getItemDayKey(log);
+      if (!key) return;
+      if (!logsByDay[key]) logsByDay[key] = [];
+      logsByDay[key].push(log);
+    });
+
+    const commentsByDay = {};
+    applyFilters(workoutSplits).forEach((w) => {
+      const key = getItemDayKey(w);
+      if (!key) return;
+      if (!commentsByDay[key]) commentsByDay[key] = [];
+      commentsByDay[key].push(w);
+    });
+
+    const todayKey = formatDateKey(new Date());
+    const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const monthKeys = new Set([monthKey(new Date()), monthKey(logCalendarMonth)]);
+    [...athleteLogs, ...workoutSplits].forEach((item) => {
+      const k = getItemDayKey(item);
+      if (k && (!filterName || item.name === filterName)) monthKeys.add(k.slice(0, 7));
+    });
+    const step = (dir) =>
+      setLogCalendarMonth(
+        isMonthView
+          ? new Date(logCalendarMonth.getFullYear(), logCalendarMonth.getMonth() + dir, 1)
+          : new Date(logCalendarMonth.getFullYear(), logCalendarMonth.getMonth(), logCalendarMonth.getDate() + dir * 7)
+      );
+    const weekStartDate = getSundayStart(logCalendarMonth);
+    const weekEndDate = new Date(weekStartDate.getFullYear(), weekStartDate.getMonth(), weekStartDate.getDate() + 6);
+    const visibleDays = isMobile && isMonthView
+      ? days.filter((date) => {
+          const k = formatDateKey(date);
+          return (logsByDay[k] || []).length > 0 || (commentsByDay[k] || []).length > 0;
+        })
+      : days;
+
+    const renderDayLog = (log) => {
+      const ratio = getSafeReadinessRatio(log.readinessRatio);
+      const color = getReadinessColor(ratio);
+      const selected = selectedDayKey === getItemDayKey(log);
+
+      return (
+        <button
+          key={log.id}
+          type="button"
+          onClick={() => setSelectedDayKey(selected ? null : getItemDayKey(log))}
+          style={{
+            display: "block",
+            width: "100%",
+            textAlign: "left",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            color: "#f8fafc",
+            padding: 8,
+            marginBottom: 6,
+            borderRadius: 10,
+            border: `2px solid ${color}`,
+            background: selected ? `${color}33` : "rgba(15,23,42,0.7)",
+          }}
+        >
+          <span style={{ ...badgeStyle(color), padding: "3px 7px", fontSize: 11 }}>
+            {getReadinessStatus(ratio)}
+          </span>
+          <span style={{ display: "block", margin: "6px 0 2px", fontSize: 12 }}>
+            Ratio {Number.isFinite(ratio) ? ratio.toFixed(2) : "N/A"} · Readiness {getDailyReadinessDisplay(log.phi)}
+          </span>
+          <span style={{ display: "block", fontSize: 12, fontWeight: 700 }}>
+            Train: {getTrainingStatusDisplay(log.shouldTrainToday)}
+          </span>
+        </button>
+      );
+    };
+
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+          <select
+            className={styles.dashboardFilterInput}
+            style={{ margin: 0, width: isMobile ? "100%" : undefined }}
+            value={logCalendarView}
+            onChange={(e) => setLogCalendarView(e.target.value)}
+            aria-label="Calendar view"
+          >
+            <option value="month">Monthly View</option>
+            <option value="week">Weekly View</option>
+          </select>
+          <div style={{ position: "relative", width: isMobile ? "100%" : undefined }} data-dropdown="date">
+            <button
+              type="button"
+              className={styles.dashboardFilterInput}
+              style={{ margin: 0, width: "100%", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
+              onClick={() => setDatePickerOpen(!datePickerOpen)}
+              aria-expanded={datePickerOpen}
+              aria-label="Select month and year"
+            >
+              {logCalendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })} ▾
+            </button>
+            {datePickerOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 6px)",
+                  left: 0,
+                  zIndex: 20,
+                  width: isMobile ? "100%" : 320,
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid rgba(148,163,184,0.3)",
+                  background: "#0f172a",
+                  boxShadow: "0 12px 30px rgba(0,0,0,0.45)",
+                }}
+              >
+                <select
+                  className={styles.dashboardFilterInput}
+                  style={{ margin: "0 0 10px", width: "100%" }}
+                  value={logCalendarMonth.getFullYear()}
+                  onChange={(e) =>
+                    setLogCalendarMonth(new Date(Number(e.target.value), logCalendarMonth.getMonth(), 1))
+                  }
+                  aria-label="Select year"
+                >
+                  {Array.from({ length: 201 }, (_, i) => 1900 + i).map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+                  {Array.from({ length: 12 }, (_, m) => {
+                    const active = logCalendarMonth.getMonth() === m;
+                    const hasData = monthKeys.has(`${logCalendarMonth.getFullYear()}-${String(m + 1).padStart(2, "0")}`);
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => {
+                          setLogCalendarMonth(new Date(logCalendarMonth.getFullYear(), m, 1));
+                          setDatePickerOpen(false);
+                        }}
+                        style={{
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          color: "#f8fafc",
+                          padding: "8px 4px",
+                          borderRadius: 10,
+                          fontWeight: active ? 700 : 400,
+                          border: `1px solid ${active ? "rgba(47,124,255,0.9)" : "rgba(148,163,184,0.25)"}`,
+                          background: active ? "rgba(47,124,255,0.3)" : "rgba(15,23,42,0.5)",
+                          opacity: hasData || active ? 1 : 0.6,
+                        }}
+                      >
+                        {new Date(2000, m, 1).toLocaleDateString("en-US", { month: "short" })}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <button type="button" style={{
+              margin: 0,
+              minHeight: 44,
+              padding: "10px 14px",
+              border: "1px solid rgba(148, 163, 184, 0.28)",
+              borderRadius: 10,
+              background: "rgba(255, 255, 255, 0.05)",
+              color: "#f8fafc",
+              cursor: "pointer",
+              fontWeight: 600,
+            }} onClick={() => step(-1)}>
+              Previous
+            </button>
+            <button type="button" style={{
+              margin: 0,
+              minHeight: 44,
+              padding: "10px 14px",
+              border: "1px solid rgba(148, 163, 184, 0.28)",
+              borderRadius: 10,
+              background: "rgba(255, 255, 255, 0.05)",
+              color: "#f8fafc",
+              cursor: "pointer",
+              fontWeight: 600,
+            }} onClick={() => step(1)}>
+              Next
+            </button>
+          </div>
+        </div>
+
+        {isMobile && isMonthView && visibleDays.length === 0 && (
+          <p style={{ color: "#9ca8b8" }}>No logs this month.</p>
+        )}
+
+        <div
+          style={{
+            display: isMobile ? "flex" : "grid",
+            flexDirection: isMobile ? "column" : undefined,
+            gridTemplateColumns: isMobile ? undefined : "repeat(7, minmax(0, 1fr))",
+            gap: 10,
+          }}
+        >
+          {visibleDays.map((date) => {
+            const key = formatDateKey(date);
+            const dayLogs = logsByDay[key] || [];
+            const dayComments = commentsByDay[key] || [];
+            const inMonth = !isMonthView || date.getMonth() === logCalendarMonth.getMonth();
+
+            return (
+              <div
+                key={key}
+                style={{
+                  minHeight: isMobile ? 0 : isMonthView ? 110 : 160,
+                  padding: 8,
+                  borderRadius: 12,
+                  border: `1px solid ${key === todayKey ? "rgba(47,124,255,0.75)" : "rgba(148,163,184,0.18)"}`,
+                  background: key === todayKey ? "rgba(47,124,255,0.1)" : "rgba(15,23,42,0.4)",
+                  opacity: inMonth ? 1 : 0.5,
+                  minWidth: 0,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 6, marginBottom: 8 }}>
+                  <strong>{date.toLocaleDateString("en-US", { weekday: "short" })}</strong>
+                  <span style={{ color: "#cbd5e1", fontSize: 13 }}>
+                    {date.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}
+                  </span>
+                </div>
+                {dayLogs.length === 0 && dayComments.length === 0 ? (
+                  <p style={{ margin: 0, color: "#9ca8b8", fontSize: 12 }}>No log</p>
+                ) : (
+                  dayLogs.map(renderDayLog)
+                )}
+                {dayComments.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDayKey(selectedDayKey === key ? null : key)}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      color: "#f8fafc",
+                      padding: 8,
+                      borderRadius: 10,
+                      border: "2px dashed rgba(47,124,255,0.8)",
+                      background: selectedDayKey === key ? "rgba(47,124,255,0.25)" : "rgba(15,23,42,0.7)",
+                      fontSize: 12,
+                    }}
+                  >
+                    <strong>Workout{dayComments.length > 1 ? ` (${dayComments.length})` : ""}</strong>
+                    <span style={{ display: "block", marginTop: 4, color: "#cbd5e1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {dayComments[0].comment || dayComments[0].notes || dayComments[0].workoutName || ""}
+                    </span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
     const renderAthleteLogCard = (log, showDelete = true) => {
       const safeReadinessRatio = getSafeReadinessRatio(log.readinessRatio);
       const trend = getReadinessTrend(getAthleteLogsForTrend(log), 3);
       const readinessColor = getReadinessColor(safeReadinessRatio);
       const readinessStatus =
-        log.readinessStatus || getReadinessStatus(safeReadinessRatio);
-
-      const rpeDifference =
-        Number(log.actualRPE || 0) - Number(log.plannedRPE || 0);
-
-      const rpeAdjustment = rpeDifference * 0.2;
+        getReadinessStatus(safeReadinessRatio);
 
       return (
         <div
@@ -1651,7 +2134,7 @@ export default function CoachDashboard() {
 
           <p>Event Group: {log.eventGroup || "N/A"}</p>
           <p>Session: {log.sessionType || "N/A"}</p>
-          <p>Session Date: {log.sessionDate || "N/A"}</p>
+          <p>Session Date: {formatDate(log.sessionDate)}</p>
 
           <p style={{ color: readinessColor }}>
             Readiness Ratio: <strong>{Number.isFinite(safeReadinessRatio) ? safeReadinessRatio.toFixed(2) : "N/A"}</strong>
@@ -1662,10 +2145,10 @@ export default function CoachDashboard() {
           <div className={styles.smallCard}>
 
             <p style={{ margin: "0 0 6px", fontWeight: "bold" }}>
-              Athlete Variability Model
+              Readiness Stability Model
             </p>
-            <p style={{ margin: "0 0 4px" }}>Daily Readiness: {log.phi ?? "N/A"}</p>
-            <p style={{ margin: "0 0 4px" }}>Athlete Variability: {log.athV ?? "N/A"}</p>
+            <p style={{ margin: "0 0 4px" }}>Daily Readiness: {getDailyReadinessDisplay(log.phi)}</p>
+            <p style={{ margin: "0 0 4px" }}>Readiness Stability: {log.athV ?? "N/A"}</p>
             <p style={{ margin: "0 0 4px" }}>3-Day Avg: {log.athV3DayAvg ?? "N/A"}</p>
             <p style={{ margin: "0 0 4px" }}>7-Day Avg: {log.athV7DayAvg ?? "N/A"}</p>
             <p style={{ margin: "0 0 4px" }}>14-Day Avg: {log.athV14DayAvg ?? "N/A"}</p>
@@ -1680,7 +2163,7 @@ export default function CoachDashboard() {
             {getReadinessRecommendation(safeReadinessRatio, log.shouldTrainToday)}
           </p>
 
-          <p>Should Train Today: {log.shouldTrainToday || "N/A"}</p>
+          <p>Training Status: {getTrainingStatusDisplay(log.shouldTrainToday)}</p>
           <p>
             Yesterday&apos;s Workout Completed:{" "}
             <strong
@@ -1700,8 +2183,6 @@ export default function CoachDashboard() {
           </p>
           <p>Planned RPE: {log.plannedRPE || "N/A"}</p>
           <p>Yesterday’s RPE: {log.actualRPE || "N/A"}</p>
-          <p>RPE Difference: {rpeDifference.toFixed(1)}</p>
-          <p>RPE Adjustment: {rpeAdjustment.toFixed(2)}</p>
           <p style={{ whiteSpace: "pre-wrap" }}>
             Athlete Notes: {log.notes || "None"}
           </p>
@@ -1861,7 +2342,7 @@ export default function CoachDashboard() {
                   <strong>Session:</strong> {item.log.sessionType || "N/A"}
                 </p>
                 <p style={{ margin: "0 0 6px" }}>
-                  <strong>Session Date:</strong> {item.log.sessionDate || "N/A"}
+                  <strong>Session Date:</strong> {formatDate(item.log.sessionDate)}
                 </p>
                 <p style={{ margin: "0 0 6px" }}>
                   <strong>Should Train Today:</strong>{" "}
@@ -1880,7 +2361,7 @@ export default function CoachDashboard() {
               <button
                 onClick={() => {
                   markMailboxItemRead(item.id);
-                  openLogsWithFilters({ name: item.athleteName, alertStatus: "Alerts Only" });
+                  openLogsWithFilters({ name: item.athleteName });
                   setMailboxOpen(false);
                 }}
                 className={`${styles.dashboardButton} ${styles.dashboardButtonFullWidth}`}
@@ -1899,6 +2380,7 @@ export default function CoachDashboard() {
   <div className={styles.dashboardPage}>
     
       {renderMailboxPanel()}
+      {renderInfoPanel()}
 
       {groupMessageOpen && (
         <div
@@ -2010,7 +2492,7 @@ export default function CoachDashboard() {
         </div>
       )}
 
-      <div style={{ maxWidth: 1000, margin: "0 auto", width: "100%", marginBottom: isMobile ? 12 : 20, padding: isMobile ? "0 10px" : 0 }}>
+      <div style={{ maxWidth: "none", margin: 0, width: "100%", marginBottom: isMobile ? 12 : 20, padding: isMobile ? "0 10px" : 0 }}>
         <div
           style={{
             display: "flex",
@@ -2021,7 +2503,7 @@ export default function CoachDashboard() {
           }}
         >
           <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-            <div style={{ position: "relative" }}>
+            <div style={{ position: "relative" }} data-dropdown="nav">
               <button
                 type="button"
                 onClick={() => setCoachMenuOpen((current) => !current)}
@@ -2135,6 +2617,29 @@ export default function CoachDashboard() {
             }}
           >
             <button
+              onClick={() => setInfoOpen(true)}
+              title="Coach guide"
+              aria-label="Open coach guide"
+              style={{
+                position: "relative",
+                border: "1px solid rgba(148,163,184,0.2)",
+                background: "rgba(15,23,42,0.75)",
+                borderRadius: 999,
+                width: 58,
+                height: 58,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: 8,
+                boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
+                color: "#f8fafc",
+              }}
+            >
+              {renderInfoIcon()}
+            </button>
+
+            <button
               onClick={handleOpenMailbox}
               title="Mailbox"
               style={{
@@ -2222,7 +2727,8 @@ export default function CoachDashboard() {
 
         {activeTab === "overview" && (
           <>
-            <div className={styles.dashboardCard} style={{ marginTop: isMobile ? 18 : 32, padding: isMobile ? "14px" : undefined }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: isMobile ? 0 : 18, alignItems: "stretch", marginTop: isMobile ? 18 : 32 }}>
+            <div className={styles.dashboardCard} style={{ marginTop: 0, minWidth: 0, padding: isMobile ? "14px" : undefined }}>
               <div
                 style={{
                   display: "flex",
@@ -2263,7 +2769,7 @@ export default function CoachDashboard() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
+                    gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(200px, 1fr))",
                     gap: isMobile ? 8 : 10,
                   }}
                 >
@@ -2300,7 +2806,8 @@ export default function CoachDashboard() {
             <div
   className={styles.dashboardCard}
   style={{
-    marginTop: 22,
+    marginTop: isMobile ? 22 : 0,
+    minWidth: 0,
     border:
       atRiskAthletes.length > 0 ||
       unreadMailboxNewestFirst.length > 0 ||
@@ -2345,10 +2852,13 @@ export default function CoachDashboard() {
                 </span>
               </div>
 
-              <div style={{ display: "grid", gap: 22, marginTop: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(150px, 1fr))", gap: isMobile ? 14 : 16, marginTop: 16, alignItems: "stretch" }}>
                 <div
                   style={{
                     border: "1px solid rgba(148,163,184,0.18)",
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
                     borderRadius: 16,
                     padding: 14,
                     background:
@@ -2368,13 +2878,13 @@ export default function CoachDashboard() {
                       margin: "6px 0 8px",
                       fontSize: 24,
                       fontWeight: "bold",
-                      color: atRiskAthletes.length > 0 ? "#dc2626" : "#111827",
+                      color: atRiskAthletes.length > 0 ? "#dc2626" : "#f8fafc",
                     }}
                   >
                     {atRiskAthletes.length}
                   </p>
                   <button
-                    onClick={() => openLogsWithFilters({ alertStatus: "Alerts Only" })}
+                    onClick={() => openLogsWithFilters()}
                     className={`${styles.dashboardButtonSecondary} ${styles.dashboardButtonFullWidth}`}
                   >
                     Review Alerts
@@ -2384,8 +2894,11 @@ export default function CoachDashboard() {
                 <div
                   style={{
                     border: "1px solid rgba(148,163,184,0.18)",
-                    borderRadius: 12,
-                    padding: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    borderRadius: 16,
+                    padding: 14,
                     background:
                       unreadMailboxNewestFirst.length > 0
                         ? "rgba(255,255,255,0.04)"
@@ -2401,7 +2914,7 @@ export default function CoachDashboard() {
                       fontSize: 24,
                       fontWeight: "bold",
                       color:
-                        unreadMailboxNewestFirst.length > 0 ? "#dc2626" : "#111827",
+                        unreadMailboxNewestFirst.length > 0 ? "#dc2626" : "#f8fafc",
                     }}
                   >
                     {unreadMailboxNewestFirst.length}
@@ -2417,8 +2930,11 @@ export default function CoachDashboard() {
                 <div
                   style={{
                     border: "1px solid rgba(148,163,184,0.18)",
-                    borderRadius: 12,
-                    padding: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    borderRadius: 16,
+                    padding: 14,
                     background:
                       dailySummary.needsCoachNoteCount > 0
                         ? "rgba(245, 224, 209, 0.18)"
@@ -2479,7 +2995,7 @@ export default function CoachDashboard() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: isMobile ? "1fr" : "repeat(4, 1fr)",
+                  gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(150px, 1fr))",
                   gap: 10,
                   marginTop: 12,
                 }}
@@ -2549,7 +3065,7 @@ export default function CoachDashboard() {
                       margin: "6px 0 0",
                       fontSize: 22,
                       fontWeight: "bold",
-                      color: dailySummary.missedWorkoutsThisWeek > 0 ? "#dc2626" : "#111827",
+                      color: dailySummary.missedWorkoutsThisWeek > 0 ? "#dc2626" : "#f8fafc",
                     }}
                   >
                     {dailySummary.missedWorkoutsThisWeek}
@@ -2602,6 +3118,7 @@ export default function CoachDashboard() {
                 </div>
               </div>
             </div>
+            </div>
 
             {showMissedWorkoutList && (
               <div
@@ -2644,7 +3161,8 @@ export default function CoachDashboard() {
               </div>
             )}
 
-            <div className={styles.dashboardCard} style={{ marginTop: 18 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: 18, alignItems: "stretch", marginTop: 18 }}>
+            <div className={styles.dashboardCard} style={{ marginTop: 0, minWidth: 0 }}>
               <div
                 style={{
                   display: "flex",
@@ -2657,49 +3175,39 @@ export default function CoachDashboard() {
                 <div>
                   <h2 className={styles.dashboardHeadingReset}>Group Readiness Overview</h2>
                   <p className={styles.dashboardSubtitle}>
-                    Stress, recovery, and recent trend movement by group.
+                    Recent readiness trends by group.
                   </p>
-                </div>
-                <div style={{ borderLeft: "1px solid rgba(148,163,184,0.18)", paddingLeft: 12, minWidth: 180 }}>
-                  <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#cbd5e1", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                    Group colors
-                  </p>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {groupScatterData.map((item) => (
-                      <div key={item.label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <span
-                          style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: "50%",
-                            background: item.color,
-                            border: "1px solid rgba(255,255,255,0.4)",
-                            flexShrink: 0,
-                          }}
-                        />
-                        <span style={{ color: "#f8fafc", fontSize: 12, fontWeight: 600 }}>{item.label}</span>
-                      </div>
-                    ))}
-                  </div>
                 </div>
               </div>
-
-              {renderScatterPlot({
-                data: groupScatterData,
-                title: "",
-                xLabel: "Stress score",
-                yLabel: "Sleep score",
-                fallbackMessage: "No group readiness data available yet.",
-              })}
 
               {renderLineChart({
                 data: groupReadinessTrendData,
                 title: "",
                 fallbackMessage: "No readiness trend data available for groups yet.",
               })}
+
+              {groupReadinessTrendData.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", marginTop: 12 }}>
+                  {groupReadinessTrendData.map((item) => (
+                    <div key={item.label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <span
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: "50%",
+                          background: item.color,
+                          border: "1px solid rgba(255,255,255,0.4)",
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ color: "#f8fafc", fontSize: 12, fontWeight: 600 }}>{item.label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className={styles.dashboardCard} style={{ marginTop: 18 }}>
+            <div className={styles.dashboardCard} style={{ marginTop: 0, minWidth: 0 }}>
               <div
                 style={{
                   display: "flex",
@@ -2739,7 +3247,7 @@ export default function CoachDashboard() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
+                    gridTemplateColumns: "1fr",
                     gap: isMobile ? 8 : 10,
                   }}
                 >
@@ -2805,6 +3313,7 @@ export default function CoachDashboard() {
                   ))}
                 </div>
               )}
+            </div>
             </div>
           </>
         )}
@@ -2873,45 +3382,251 @@ export default function CoachDashboard() {
     </div>
 
 <div className={styles.dashboardCard} style={{ marginTop: 16, padding: isMobile ? "14px" : undefined }}>
-      <h2 className={styles.dashboardHeadingReset}>Planned Sessions</h2>
-
-      {plannedSessions.length === 0 ? (
-        <p>No planned sessions yet.</p>
-      ) : (
-        plannedSessions.map((session) => (
-          <div
-            key={session.id}
-            className={styles.smallCard}
-            style={{ marginBottom: 10 }}
+      <div
+        style={{
+          display: "flex",
+          alignItems: isMobile ? "stretch" : "center",
+          justifyContent: "space-between",
+          flexDirection: isMobile ? "column" : "row",
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <h2 className={styles.dashboardHeadingReset}>Planned Sessions</h2>
+          <p className={styles.dashboardSubtitle}>{planningCalendarLabel}</p>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: isMobile ? "stretch" : "center",
+            flexDirection: isMobile ? "column" : "row",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <select
+            className={styles.dashboardInput}
+            value={planningView}
+            onChange={(event) => setPlanningView(event.target.value)}
+            aria-label="Calendar view"
+            style={{ width: isMobile ? "100%" : "auto", minWidth: 130, margin: 0 }}
           >
-            <p className={styles.dashboardHeadingReset}>
-              <strong>{session.sessionType || "Session"}</strong>
-            </p>
-
-            <p>Group: {session.sessionGroup || "All"}</p>
-            <p>Date: {session.sessionDate || "N/A"}</p>
-            <p>Planned RPE: {session.plannedRPE || "N/A"}</p>
-
-            <p style={{ whiteSpace: "pre-wrap" }}>
-              Notes: {session.workoutNotes || "None"}
-            </p>
-
-            <button
-              onClick={() => handleEditSession(session)}
-              className={styles.dashboardButtonAccent}
+            <option value="week">Weekly view</option>
+            <option value="month">Monthly view</option>
+          </select>
+          {planningView === "week" && (
+            <label
+              style={{
+                display: isMobile ? "flex" : "inline-flex",
+                flexDirection: isMobile ? "column" : "row",
+                alignItems: isMobile ? "stretch" : "center",
+                gap: 6,
+                color: "#cbd5e1",
+                fontSize: 13,
+              }}
             >
-              Edit
-            </button>
+              Choose week
+              <input
+                className={styles.dashboardInput}
+                type="week"
+                value={getISOWeekValue(
+                  new Date(
+                    planningWeekStart.getFullYear(),
+                    planningWeekStart.getMonth(),
+                    planningWeekStart.getDate() + 1
+                  )
+                )}
+                onChange={(event) => {
+                  const weekStart = getMondayFromISOWeek(event.target.value);
+                  if (weekStart) setPlanningDate(weekStart);
+                }}
+                aria-label="Choose week"
+                style={{ width: isMobile ? "100%" : "auto", margin: 0 }}
+              />
+            </label>
+          )}
+          <button
+            type="button"
+            onClick={() =>
+              setPlanningDate((currentDate) => {
+                if (planningView === "week") {
+                  const previousWeek = getSundayStart(currentDate);
+                  previousWeek.setDate(previousWeek.getDate() - 7);
+                  return previousWeek;
+                }
 
-            <button
-              onClick={() => handleDeleteSession(session.id)}
-              className={styles.dashboardButtonDanger}
+                return new Date(
+                  currentDate.getFullYear(),
+                  currentDate.getMonth() - 1,
+                  1
+                );
+              })
+            }
+            style={{
+              margin: 0,
+              minHeight: 44,
+              padding: "10px 14px",
+              border: "1px solid rgba(148, 163, 184, 0.28)",
+              borderRadius: 10,
+              background: "rgba(255, 255, 255, 0.05)",
+              color: "#f8fafc",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+            aria-label={`Previous ${planningView}`}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            onClick={() => setPlanningDate(new Date())}
+            className={styles.dashboardButtonSecondary}
+            style={{ margin: 0 }}
+          >
+            Today
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setPlanningDate((currentDate) => {
+                if (planningView === "week") {
+                  const nextWeek = getSundayStart(currentDate);
+                  nextWeek.setDate(nextWeek.getDate() + 7);
+                  return nextWeek;
+                }
+
+                return new Date(
+                  currentDate.getFullYear(),
+                  currentDate.getMonth() + 1,
+                  1
+                );
+              })
+            }
+            style={{
+              margin: 0,
+              minHeight: 44,
+              padding: "10px 14px",
+              border: "1px solid rgba(148, 163, 184, 0.28)",
+              borderRadius: 10,
+              background: "rgba(255, 255, 255, 0.05)",
+              color: "#f8fafc",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+            aria-label={`Next ${planningView}`}
+          >
+            Next
+          </button>
+        </div>
+      </div>
+
+      {isMobile &&
+        planningView === "month" &&
+        !planningCalendarDates.some(
+          (date) => (planningWeekSessions[formatDateKey(date)] || []).length > 0
+        ) && <p style={{ color: "#9ca8b8" }}>No sessions this month.</p>}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: isMobile ? "1fr" : "repeat(7, minmax(0, 1fr))",
+          gap: 10,
+        }}
+      >
+        {planningCalendarDates.map((date) => {
+          const dateKey = formatDateKey(date);
+          const daySessions = planningWeekSessions[dateKey] || [];
+          if (isMobile && planningView === "month" && daySessions.length === 0) {
+            return null;
+          }
+
+          const isToday = dateKey === formatDateKey(new Date());
+          const isCurrentMonth =
+            date.getMonth() === planningDate.getMonth() &&
+            date.getFullYear() === planningDate.getFullYear();
+
+          return (
+            <div
+              key={dateKey}
+              style={{
+                minHeight: isMobile ? 0 : planningView === "month" ? 120 : 180,
+                padding: 10,
+                borderRadius: 14,
+                border: `1px solid ${isToday ? "rgba(47,124,255,0.75)" : "rgba(148,163,184,0.18)"}`,
+                background: isToday ? "rgba(47,124,255,0.1)" : "rgba(15,23,42,0.4)",
+                opacity: planningView === "month" && !isCurrentMonth ? 0.55 : 1,
+              }}
             >
-              Delete
-            </button>
-          </div>
-        ))
-      )}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 6,
+                  marginBottom: isMobile && daySessions.length === 0 ? 4 : 10,
+                }}
+              >
+                <strong>{date.toLocaleDateString("en-US", { weekday: "short" })}</strong>
+                <span style={{ color: "#cbd5e1", fontSize: 13 }}>
+                  {planningView === "month" && !isMobile
+                    ? date.getDate()
+                    : date.toLocaleDateString("en-US", {
+                        month: "numeric",
+                        day: "numeric",
+                      })}
+                </span>
+              </div>
+
+              {daySessions.length === 0 ? (
+                <p style={{ margin: 0, color: "#9ca8b8", fontSize: 12 }}>No sessions</p>
+              ) : (
+                daySessions.map((session) => (
+                  <div
+                    key={session.id}
+                    style={{
+                      padding: 9,
+                      marginBottom: 8,
+                      borderRadius: 10,
+                      background: "rgba(47,124,255,0.16)",
+                      border: "1px solid rgba(47,124,255,0.3)",
+                    }}
+                  >
+                    <p style={{ margin: "0 0 5px", fontWeight: 700, overflowWrap: "anywhere" }}>
+                      {session.sessionType || "Session"}
+                    </p>
+                    <p style={{ margin: "0 0 4px", color: "#cbd5e1", fontSize: 12 }}>
+                      {session.sessionGroup || "All"} · RPE {session.plannedRPE || "N/A"}
+                    </p>
+                    {session.workoutNotes && (
+                      <p style={{ margin: "0 0 8px", color: "#9ca8b8", fontSize: 12, whiteSpace: "pre-wrap" }}>
+                        {session.workoutNotes}
+                      </p>
+                    )}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleEditSession(session)}
+                        className={styles.dashboardButtonAccent}
+                        style={{ minHeight: 32, padding: "6px 9px", fontSize: 12, margin: 0 }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSession(session.id)}
+                        className={styles.dashboardButtonDanger}
+                        style={{ minHeight: 32, padding: "6px 9px", fontSize: 12, margin: 0 }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   </>
 )}
@@ -2921,30 +3636,36 @@ export default function CoachDashboard() {
             <div className={styles.dashboardCard} style={{ marginTop: isMobile ? 18 : 32, padding: isMobile ? "14px" : undefined }}>
               <h2 className={styles.dashboardHeadingReset}>Team Averages</h2>
               <p className={styles.dashboardSubtitle}>
-                Compare short-term, weekly, and baseline readiness trends.
+                Compare short-term, weekly, and baseline readiness trends by event group.
               </p>
 
-              {athleteAverages.length === 0 ? (
-                <p>No athlete averages available yet.</p>
+              {groupAverages.length === 0 ? (
+                <p>No group averages available yet.</p>
               ) : (
-                athleteAverages.map((athlete) => (
-                  <div
-                    key={`${athlete.name}-${athlete.eventGroup}`}
-                    className={styles.smallCard}
-                    style={{ marginBottom: 10 }}
-                  >
-                    <p className={styles.dashboardHeadingReset}>
-                      <strong>{athlete.name}</strong>
-                    </p>
-                    <p>Event Group: {athlete.eventGroup}</p>
-                    <p>3-Day Avg: {athlete.threeDayAvg ?? "N/A"}</p>
-                    <p>7-Day Avg: {athlete.sevenDayAvg ?? "N/A"}</p>
-                    <p>14-Day Avg: {athlete.fourteenDayAvg ?? "N/A"}</p>
-                    <p>
-                      Trend: <strong>{athlete.trend}</strong>
-                    </p>
-                  </div>
-                ))
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
+                    gap: 16,
+                    marginTop: 12,
+                    maxWidth: isMobile ? "none" : 1000,
+                  }}
+                >
+                  {groupAverages.map((group) => (
+                    <div key={group.eventGroup} className={styles.smallCard} style={isMobile ? undefined : { aspectRatio: "5 / 4", boxSizing: "border-box", padding: "clamp(14px, 2vw, 28px)", fontSize: "clamp(14px, 1.1vw, 18px)", display: "flex", flexDirection: "column", justifyContent: "space-evenly" }}>
+                      <p className={styles.dashboardHeadingReset}>
+                        <strong>{group.eventGroup}</strong>
+                      </p>
+                      <p>Athletes: {group.athleteCount}</p>
+                      <p>3-Day Avg: {group.threeDayAvg ?? "N/A"}</p>
+                      <p>7-Day Avg: {group.sevenDayAvg ?? "N/A"}</p>
+                      <p>14-Day Avg: {group.fourteenDayAvg ?? "N/A"}</p>
+                      <p>
+                        Trend: <strong>{group.trend}</strong>
+                      </p>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </section>
@@ -2954,18 +3675,57 @@ export default function CoachDashboard() {
           <section id="coach-athlete-logs-section" style={{ marginTop: isMobile ? 18 : 32 }}>
             {renderFilters()}
 
-            <div className={styles.dashboardCard} style={{ marginTop: 16, padding: isMobile ? "14px" : undefined }}>
-              <h2 className={styles.dashboardHeadingReset}>Athlete Readiness Logs</h2>
-              <p className={styles.dashboardSubtitle}>
-                Showing {filteredAthleteLogs.length} of {athleteLogs.length} logs
-              </p>
+            {!filterName ? (
+              <div className={styles.dashboardCard} style={{ marginTop: 16, padding: isMobile ? "14px" : undefined }}>
+                <h2 className={styles.dashboardHeadingReset}>Athlete Logs</h2>
+                <p className={styles.dashboardSubtitle}>
+                  Select an athlete above to view their logs and workout splits.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className={styles.dashboardCard} style={{ marginTop: 16, padding: isMobile ? "14px" : undefined }}>
+                  <h2 className={styles.dashboardHeadingReset}>{filterName} — Readiness & Workout Splits</h2>
+                  <p className={styles.dashboardSubtitle}>
+                    Click a day to see the full log and workout splits.
+                  </p>
 
-              {filteredAthleteLogs.length === 0 ? (
-                <p>No logs match your filters.</p>
-              ) : (
-                filteredAthleteLogs.map((log) => renderAthleteLogCard(log, true))
-              )}
-            </div>
+                  {renderLogCalendar()}
+                </div>
+
+                {selectedDayKey && (
+                  <div className={styles.dashboardCard} style={{ marginTop: 16, padding: isMobile ? "14px" : undefined }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                      <h2 className={styles.dashboardHeadingReset}>{formatDate(selectedDayKey)}</h2>
+                      <button
+                        type="button"
+                        className={styles.dashboardButtonSecondary}
+                        style={{ margin: 0 }}
+                        onClick={() => setSelectedDayKey(null)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    {filteredAthleteLogs
+                      .filter((log) => getItemDayKey(log) === selectedDayKey)
+                      .map((log) => renderAthleteLogCard(log, true))}
+                    {applyFilters(workoutSplits)
+                      .filter((w) => getItemDayKey(w) === selectedDayKey)
+                      .map((workout) => (
+                        <div key={workout.id} className={styles.smallCard} style={{ marginTop: 12 }}>
+                          <p style={{ margin: "0 0 8px", color: "#9ca8b8", fontSize: 13 }}>
+                            Workout splits
+                            {workout.workoutName ? ` • ${workout.workoutName}` : ""}
+                          </p>
+                          <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+                            {workout.comment || workout.notes}
+                          </p>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </>
+            )}
           </section>
                 )}
       </div>
